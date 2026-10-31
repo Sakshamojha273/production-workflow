@@ -1,0 +1,185 @@
+{
+ "history": [
+  {
+   "date": "2026-12-02",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 540.0
+  },
+  {
+   "date": "2026-12-03",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 451.0
+  },
+  {
+   "date": "2026-12-04",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-05",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 388.0
+  },
+  {
+   "date": "2026-12-06",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-07",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 714.0
+  },
+  {
+   "date": "2026-12-08",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 1205.0
+  },
+  {
+   "date": "2026-12-09",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 763.0
+  },
+  {
+   "date": "2026-12-10",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 314.0
+  },
+  {
+   "date": "2026-12-11",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 126.0
+  },
+  {
+   "date": "2026-12-12",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 853.0
+  },
+  {
+   "date": "2026-12-13",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 129.0
+  },
+  {
+   "date": "2026-12-14",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-15",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 69.0
+  },
+  {
+   "date": "2026-12-16",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 134.0
+  },
+  {
+   "date": "2026-12-17",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-18",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 136.0
+  },
+  {
+   "date": "2026-12-19",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 555.0
+  },
+  {
+   "date": "2026-12-20",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 99.0
+  },
+  {
+   "date": "2026-12-21",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 793.0
+  },
+  {
+   "date": "2026-12-22",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-23",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 151.0
+  },
+  {
+   "date": "2026-12-24",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 595.0
+  },
+  {
+   "date": "2026-12-25",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 145.0
+  },
+  {
+   "date": "2026-12-26",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 0.0
+  },
+  {
+   "date": "2026-12-27",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 180.0
+  },
+  {
+   "date": "2026-12-28",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 395.0
+  },
+  {
+   "date": "2026-12-29",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 1260.0
+  },
+  {
+   "date": "2026-12-30",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 377.0
+  },
+  {
+   "date": "2026-12-31",
+   "product_id": "P001",
+   "product_name": "Steel Bracket A",
+   "demand": 1866.0
+  }
+ ],
+ "total": 448
+}
