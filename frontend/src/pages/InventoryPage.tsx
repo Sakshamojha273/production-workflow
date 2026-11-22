@@ -1,7 +1,7 @@
 import { format } from 'date-fns';
 import { useInventory } from '../hooks/useData';
 import { KPICard } from '../components/KPICard';
-import { cn, formatNumber, formatCurrency } from '../utils/helpers';
+import { cn, formatNumber, formatCurrency, downloadFile, toCSV } from '../utils/helpers';
 import {
   Box,
   Package,
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 export function InventoryPage() {
-  const { data: inventory, loading } = useInventory();
+  const { data: inventory, loading, refetch } = useInventory();
 
   const healthy = inventory?.filter(i => i.status === 'Healthy').length || 0;
   const low = inventory?.filter(i => i.status === 'Low').length || 0;
@@ -23,6 +23,13 @@ export function InventoryPage() {
   const totalValue = inventory?.reduce((sum, i) => sum + i.current_level * i.unit_cost, 0) || 0;
   const avgCoverage = inventory?.reduce((sum, i) => sum + i.coverage_days, 0) / (inventory?.length || 1);
 
+  const handleExport = () => {
+    downloadFile(toCSV(
+      ['Product ID', 'Product', 'Category', 'Units', 'Safety Stock', 'Reorder Point', 'Unit Cost', 'Value', 'Coverage Days', 'Status'],
+      (inventory || []).map(i => [i.product_id, i.product_name, i.category, i.current_level, i.safety_stock, i.reorder_point, i.unit_cost, (i.current_level * i.unit_cost).toFixed(2), i.coverage_days, i.status]),
+    ), 'inventory.csv');
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -30,13 +37,14 @@ export function InventoryPage() {
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Inventory</h1>
           <p className="text-secondary-500">Track inventory levels, safety stock, and coverage</p>
+          <p className="text-xs text-secondary-400 mt-1">Coverage = units ÷ average daily demand (last 28 days). Unit cost = production cost ÷ units produced. Safety stock = 1.65 × σ(daily demand) × √lead time.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary">
+          <button className="btn-secondary" onClick={handleExport} disabled={!inventory?.length}>
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-secondary" disabled={loading}>
+          <button className="btn-secondary" onClick={() => refetch()} disabled={loading}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>

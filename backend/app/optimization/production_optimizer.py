@@ -287,6 +287,19 @@ class ProductionOptimizer:
         machine_names = {m.machine_id: m.name for m in problem.machines}
         worker_names = {w.worker_id: w.name for w in problem.workers}
 
+        # Per-machine utilization over the horizon (same definition as the
+        # plan-level machine_utilization): planned units / available units.
+        machine_cap: Dict[str, int] = {}
+        machine_load: Dict[str, int] = {}
+        for (mid, _day), cap in solution.machine_day_capacity.items():
+            machine_cap[mid] = machine_cap.get(mid, 0) + cap
+        for (mid, _day), load in solution.machine_day_load.items():
+            machine_load[mid] = machine_load.get(mid, 0) + load
+        machine_util_by_machine = {
+            mid: round(100.0 * machine_load.get(mid, 0) / cap, 2) if cap > 0 else 0.0
+            for mid, cap in machine_cap.items()
+        }
+
         plan = ProductionPlan(
             plan_id=f"PLAN-{uuid.uuid4().hex[:8].upper()}",
             optimization_run_id=opt_run.id,
@@ -310,6 +323,7 @@ class ProductionOptimizer:
                 "on_time_fulfillment_rate": solution.on_time_fulfillment_rate,
                 "unstaffed_hours": solution.unstaffed_hours,
                 "worker_assignment": "greedy post-solve heuristic",
+                "machine_utilization_by_machine": machine_util_by_machine,
             }),
         )
         self.db.add(plan)

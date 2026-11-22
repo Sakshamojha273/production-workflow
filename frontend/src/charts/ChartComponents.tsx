@@ -136,7 +136,7 @@ export function AreaChartComponent({ data, width, height = 300, className, keys,
   );
 }
 
-export function DonutChartComponent({ data, width, height = 300, className, nameKey, valueKey, colors }: ChartProps & { nameKey: string; valueKey: string; colors?: string[] }) {
+export function DonutChartComponent({ data, width, height = 300, className, nameKey, valueKey, colors, showLabels = true }: ChartProps & { nameKey: string; valueKey: string; colors?: string[]; showLabels?: boolean }) {
   return (
     <div className={className} style={{ width: width || '100%', height }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -151,7 +151,7 @@ export function DonutChartComponent({ data, width, height = 300, className, name
             paddingAngle={2}
             dataKey={valueKey}
             nameKey={nameKey}
-            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            label={showLabels ? ({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%` : false}
             labelLine={false}
           >
             {data.map((_, index) => (

@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Tuple
@@ -6,7 +7,7 @@ from typing import Optional
 import json
 import io
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import uuid
 
@@ -19,7 +20,9 @@ from app.models.inventory import Inventory
 from app.models.demand_history import DemandHistory
 from app.models.maintenance import Maintenance, MaintenanceStatus, MaintenanceType
 from app.models.data_quality_report import DataQualityReport, DataQualityStatus
-from app.core.config import settings
+from app.core.config import settings, reference_date
+
+logger = logging.getLogger(__name__)
 
 
 # "None" is a real category in the source data (Maintenance_Status = no
@@ -30,11 +33,51 @@ CSV_NA_VALUES = [
     "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "n/a", "nan", "null",
 ]
 NO_MAINTENANCE_VALUES = {"None", "none", "Operational", "", "Unknown"}
+
+# Maintenance_Status comes in two shapes:
+#   * text labels ("None" / "Scheduled" / "Emergency"), as in the bundled 10K dataset;
+#   * a numeric 0/1 flag, as in electronics_production_orders_8k.csv
+#     (0.0 = 6,208 rows, 1.0 = 994 rows, blank = 798 rows).
+# In the 0/1 data the flag is uncorrelated with Machine_Risk_Score, vibration
+# and temperature (mean risk 0.324 vs 0.325), i.e. it marks routine planned
+# maintenance rather than breakdowns.  Mapping:
+#   0 / 0.0 / false / no  -> "Operational"  (no maintenance event)
+#   1 / 1.0 / true / yes  -> "Scheduled"    (one Preventive event that day)
+#   blank / missing       -> "Operational"  (nothing recorded; no event)
+# Other text labels are kept as-is ("Emergency" -> Emergency, unknown labels
+# -> Corrective, see _maintenance_rows).
+_MAINTENANCE_FLAG_TEXT = {
+    "0": "Operational", "false": "Operational", "no": "Operational", "n": "Operational",
+    "1": "Scheduled", "true": "Scheduled", "yes": "Scheduled", "y": "Scheduled",
+}
+
+
+def normalize_maintenance_status(values: pd.Series) -> pd.Series:
+    """Map raw Maintenance_Status values (labels or 0/1 flags) to labels."""
+    def one(value: Any) -> str:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return "Operational"
+        if isinstance(value, (bool, np.bool_)):
+            return "Scheduled" if value else "Operational"
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return "Scheduled" if float(value) > 0 else "Operational"
+        text = str(value).strip()
+        try:
+            number = float(text)
+        except ValueError:
+            number = None
+        if number is not None and not np.isnan(number):
+            return "Scheduled" if number > 0 else "Operational"
+        mapped = _MAINTENANCE_FLAG_TEXT.get(text.lower())
+        if mapped:
+            return mapped
+        return "Operational" if text in NO_MAINTENANCE_VALUES else text
+    return values.map(one)
 _BULK_CHUNK = 1000
 
 
 def planning_reference_date() -> date:
-    return settings.PLANNING_REFERENCE_DATE or date.today()
+    return reference_date()
 
 
 class DataProcessor:
@@ -232,8 +275,7 @@ class DataProcessor:
         if 'Safety_Stock' not in df.columns:
             df['Safety_Stock'] = 0
         if 'Maintenance_Status' in df.columns:
-            status = df['Maintenance_Status'].fillna('Operational').astype(str).str.strip()
-            df['Maintenance_Status'] = status.where(~status.isin(NO_MAINTENANCE_VALUES), 'Operational')
+            df['Maintenance_Status'] = normalize_maintenance_status(df['Maintenance_Status'])
         for availability_column in ('Machine_Availability', 'Worker_Availability'):
             if availability_column in df.columns:
                 # Keep the fractional availability (0-1); values > 1 are treated as percentages.
@@ -275,6 +317,17 @@ class DataProcessor:
         await self._update_demand_history(df)
         
         await self.db.commit()
+
+        # Machine vibration / temperature / risk are derived from the order
+        # sensor readings. Compute them now so the Machines page shows real
+        # values straight after an upload instead of the 0.0 column defaults
+        # (previously they were only filled once Machine Health was opened).
+        from app.ml.machine_risk import MachineRiskAnalyzer  # local: avoids import cycle / sklearn at import time
+        try:
+            await MachineRiskAnalyzer(self.db).analyze_machine_risk()
+        except Exception:  # sensor refresh must never fail an otherwise good import
+            logger.exception("Machine risk refresh after upload failed")
+            await self.db.rollback()
     
     @staticmethod
     def _validate_demand_fields(df: pd.DataFrame):
@@ -528,10 +581,22 @@ class DataProcessor:
 
     async def _upsert_maintenance(self, df: pd.DataFrame):
         rows = self._maintenance_rows(df)
-        if not rows:
-            return
         await self.db.flush()
-        update_columns = [c for c in rows[0] if c not in ('id', 'maintenance_id', 'created_at')]
+        # Re-importing must replace (not accumulate) the events this file
+        # derives: drop earlier data-derived events for the same machines and
+        # date window, e.g. ones created by an older Maintenance_Status mapping.
+        machine_ids = [str(m) for m in df['Machine_ID'].dropna().unique()] if 'Machine_ID' in df.columns else []
+        days = pd.to_datetime(df['Date'], errors='coerce').dropna() if 'Date' in df.columns else pd.Series(dtype='datetime64[ns]')
+        if machine_ids and not days.empty:
+            await self.db.execute(
+                delete(Maintenance).where(
+                    Maintenance.machine_id.in_(machine_ids),
+                    Maintenance.start_date >= days.min().date(),
+                    Maintenance.start_date <= days.max().date(),
+                    Maintenance.reason.like('Maintenance_Status=%'),
+                )
+            )
+        update_columns = [c for c in rows[0] if c not in ('id', 'maintenance_id', 'created_at')] if rows else []
         for i in range(0, len(rows), _BULK_CHUNK):
             stmt = pg_insert(Maintenance.__table__).values(rows[i:i + _BULK_CHUNK])
             stmt = stmt.on_conflict_do_update(
@@ -540,45 +605,105 @@ class DataProcessor:
             )
             await self.db.execute(stmt)
 
-        # Keep machine maintenance dates in sync with the events.
+        # Keep machine maintenance dates in sync with all stored events:
+        # last = latest event before the reference date, next = first event on
+        # or after it (never a date before the reference date).
+        await self.db.flush()
         reference = planning_reference_date()
-        by_machine: Dict[str, List[date]] = {}
-        for r in rows:
-            by_machine.setdefault(r['machine_id'], []).append(r['start_date'])
-        for machine_id, days in by_machine.items():
+        for machine_id in machine_ids:
             machine = (await self.db.execute(
                 select(Machine).where(Machine.machine_id == machine_id)
             )).scalar_one_or_none()
             if not machine:
                 continue
-            past = [d for d in days if d < reference]
-            future = [d for d in days if d >= reference]
-            machine.last_maintenance = datetime.combine(max(past), datetime.min.time()) if past else None
-            machine.next_maintenance = datetime.combine(min(future), datetime.min.time()) if future else None
+            last_day = (await self.db.execute(
+                select(func.max(Maintenance.start_date)).where(
+                    Maintenance.machine_id == machine_id, Maintenance.start_date < reference
+                )
+            )).scalar()
+            next_day = (await self.db.execute(
+                select(func.min(Maintenance.start_date)).where(
+                    Maintenance.machine_id == machine_id,
+                    Maintenance.start_date >= reference,
+                    Maintenance.status != MaintenanceStatus.CANCELLED,
+                )
+            )).scalar()
+            machine.last_maintenance = datetime.combine(last_day, datetime.min.time()) if last_day else None
+            machine.next_maintenance = datetime.combine(next_day, datetime.min.time()) if next_day else None
+
+    # Service level for computed safety stock (z for 95% cycle service level).
+    SAFETY_STOCK_Z = 1.65
+
+    @classmethod
+    def _inventory_rows(cls, df: pd.DataFrame, reference_date: Optional[date] = None) -> Dict[str, Dict[str, Any]]:
+        """Per-product inventory figures derived from the order rows.
+
+        - current_level: Inventory_Level on the latest order dated on/before the
+          reference date (latest row overall if none), i.e. stock "as of now".
+        - unit_cost: sum(Production_Cost) / sum(Production_Quantity) - the dataset's
+          Production_Cost is the cost of the whole order.
+        - safety_stock: the file's Safety_Stock when it has non-zero values,
+          otherwise z * sigma(daily demand) * sqrt(lead time), where lead time is
+          the mean Due_Date - Date in days (>= 1).
+        - reorder_point: mean daily demand * lead time + safety stock.
+        """
+        reference = pd.Timestamp(reference_date or planning_reference_date())
+        frame = df.copy()
+        frame['_date'] = pd.to_datetime(frame['Date'], errors='coerce')
+        frame['_demand'] = pd.to_numeric(frame['Demand'], errors='coerce').fillna(0)
+        frame['_level'] = pd.to_numeric(frame.get('Inventory_Level', 0), errors='coerce').fillna(0)
+        frame['_cost'] = pd.to_numeric(frame.get('Production_Cost', 0), errors='coerce').fillna(0)
+        frame['_qty'] = pd.to_numeric(frame.get('Production_Quantity', 0), errors='coerce').fillna(0)
+        frame['_ss'] = pd.to_numeric(frame.get('Safety_Stock', 0), errors='coerce').fillna(0)
+        if 'Due_Date' in frame.columns:
+            frame['_lead'] = (pd.to_datetime(frame['Due_Date'], errors='coerce') - frame['_date']).dt.days
+        else:
+            frame['_lead'] = np.nan
+        frame = frame.dropna(subset=['_date'])
+
+        rows: Dict[str, Dict[str, Any]] = {}
+        for product_id, g in frame.groupby('Product_ID'):
+            sort_cols = ['_date', 'Order_ID'] if 'Order_ID' in g.columns else ['_date']
+            g = g.sort_values(sort_cols)
+            as_of = g[g['_date'] <= reference]
+            latest = (as_of if not as_of.empty else g).iloc[-1]
+            daily = g.groupby('_date')['_demand'].sum()
+            daily = daily.reindex(pd.date_range(daily.index.min(), daily.index.max()), fill_value=0)
+            sigma = float(daily.std(ddof=1)) if len(daily) > 1 else 0.0
+            mean_daily = float(daily.mean()) if len(daily) else 0.0
+            lead = g['_lead'].dropna()
+            lead_days = max(1.0, float(lead.mean())) if not lead.empty else 1.0
+            file_ss = float(g['_ss'].max())
+            safety = file_ss if file_ss > 0 else cls.SAFETY_STOCK_Z * sigma * float(np.sqrt(lead_days))
+            qty = float(g['_qty'].sum())
+            rows[str(product_id)] = {
+                'current_level': int(round(float(latest['_level']))),
+                'safety_stock': int(round(safety)),
+                'reorder_point': int(round(mean_daily * lead_days + safety)),
+                'unit_cost': round(float(g['_cost'].sum()) / qty, 2) if qty > 0 else 0.0,
+            }
+        return rows
 
     async def _update_inventory(self, df: pd.DataFrame):
-        """Update inventory levels from dataframe"""
-        inventory_df = df[['Product_ID', 'Inventory_Level', 'Safety_Stock']].drop_duplicates()
-        
-        for _, row in inventory_df.iterrows():
-            stmt = select(Inventory).where(Inventory.product_id == row['Product_ID'])
+        """Update inventory levels from dataframe (see _inventory_rows)."""
+        for product_id, values in self._inventory_rows(df).items():
+            stmt = select(Inventory).where(Inventory.product_id == product_id)
             result = await self.db.execute(stmt)
             inventory = result.scalar_one_or_none()
-            
+
             if not inventory:
                 inventory = Inventory(
-                    product_id=row['Product_ID'],
-                    current_level=int(row['Inventory_Level']),
-                    safety_stock=int(row['Safety_Stock']),
-                    reorder_point=int(row['Safety_Stock'] * 1.5),
-                    max_stock=int(row['Inventory_Level'] * 2)
+                    product_id=product_id,
+                    max_stock=int(values['current_level'] * 2),
+                    **values,
                 )
                 self.db.add(inventory)
             else:
-                inventory.current_level = int(row['Inventory_Level'])
-                inventory.safety_stock = int(row['Safety_Stock'])
+                for key, value in values.items():
+                    setattr(inventory, key, value)
+                inventory.max_stock = max(inventory.max_stock or 0, values['current_level'])
                 inventory.last_updated = datetime.utcnow()
-    
+
     async def _update_demand_history(self, df: pd.DataFrame):
         """Upsert daily product demand after aggregating duplicate order rows."""
         demand_data = df[['Product_ID', 'Date', 'Demand', 'Production_Quantity']].copy()

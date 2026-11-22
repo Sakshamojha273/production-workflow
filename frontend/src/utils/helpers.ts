@@ -163,6 +163,15 @@ export function downloadFile(content: string, filename: string, type: string = '
   URL.revokeObjectURL(url);
 }
 
+/** Build a CSV string, quoting values that contain commas, quotes or newlines. */
+export function toCSV(headers: string[], rows: Array<Array<string | number | null | undefined>>): string {
+  const cell = (value: string | number | null | undefined) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [headers.map(cell).join(','), ...rows.map(row => row.map(cell).join(','))].join('\n');
+}
+
 export function parseCSV(csv: string): any[] {
   const lines = csv.trim().split('\n');
   const headers = lines[0].split(',').map(h => h.trim());

@@ -13,13 +13,16 @@ class ApiService {
       headers: {
         'Content-Type': 'application/json',
       },
-      timeout: 30000,
+      timeout: 180000,
     });
 
     this.client.interceptors.request.use(
       (config: InternalAxiosRequestConfig) => {
-        if (this.token) {
-          config.headers.Authorization = `Bearer ${this.token}`;
+        // getToken() also restores the token from localStorage after a page
+        // reload; every /api route except /auth/* now requires it.
+        const token = this.getToken();
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
       },
@@ -29,9 +32,24 @@ class ApiService {
     this.client.interceptors.response.use(
       (response) => response,
       (error: AxiosError<ApiError>) => {
-        if (error.response?.status === 401) {
+        // Surface the API's own reason (FastAPI `detail`) instead of axios's
+        // generic "Request failed with status code NNN", so every page that
+        // shows err.message shows something useful.
+        const detail = error.response?.data?.detail as unknown;
+        if (typeof detail === 'string' && detail) {
+          error.message = detail;
+        } else if (Array.isArray(detail) && detail.length) {
+          error.message = detail.map((d: { msg?: string }) => d?.msg || JSON.stringify(d)).join('; ');
+        }
+        // A 401 from the login endpoints is a wrong password, not an expired
+        // session: let LoginPage show the error instead of reloading the page.
+        const url = error.config?.url || '';
+        const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/demo-login');
+        if (error.response?.status === 401 && !isAuthRequest) {
           this.clearToken();
-          window.location.href = '/login';
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
         }
         return Promise.reject(error);
       }
@@ -199,6 +217,11 @@ class ApiService {
     return response.data;
   }
 
+  async getPlanningDefaults() {
+    const response = await this.client.get('/planning/defaults');
+    return response.data;
+  }
+
   async getLatestPlan() {
     const response = await this.client.get('/planning/latest');
     return response.data;
@@ -277,20 +300,27 @@ class ApiService {
     return response.data;
   }
 
-  // Reports
-  async generateReport(data: {
-    report_type: string;
-    start_date: string;
-    end_date: string;
-    format: string;
-    filters?: Record<string, any>;
-  }) {
-    const response = await this.client.post('/reports', data);
+  // Reports (CSV built server-side from live data)
+  async listReports() {
+    const response = await this.client.get('/reports');
     return response.data;
   }
 
-  async getReports(reportType?: string, limit: number = 50) {
-    const response = await this.client.get('/reports', { params: { report_type: reportType, limit } });
+  /** Downloads a CSV through the authenticated client; returns blob, filename and row count. */
+  async downloadReport(reportId: string, params?: { start_date?: string; end_date?: string }) {
+    const response = await this.client.get(`/reports/${reportId}`, { params, responseType: 'blob' });
+    const disposition = String(response.headers['content-disposition'] || '');
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    return {
+      blob: response.data as Blob,
+      filename: match?.[1] || `${reportId}.csv`,
+      rows: Number(response.headers['x-row-count'] ?? NaN),
+    };
+  }
+
+  // Settings (read-only backend configuration)
+  async getSettings() {
+    const response = await this.client.get('/settings');
     return response.data;
   }
 

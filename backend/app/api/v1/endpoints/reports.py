@@ -1,246 +1,186 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Optional, List
-from datetime import date
-import uuid
-import pandas as pd
+"""Downloadable CSV reports built from the live database.
+
+GET /api/reports              -> catalogue of reports with current row counts
+GET /api/reports/{report_id}  -> the CSV file (Content-Disposition: attachment)
+
+Reports: plan-summary, plan-items, orders, inventory, workforce-assignments.
+Plan reports use the latest baseline plan (the one Production Planning shows).
+"""
+import csv
 import io
+from datetime import date
+from typing import Callable, Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.order import Order
-from app.models.production_plan import ProductionPlan
-from app.models.workforce_assignment import WorkforceAssignment
-from app.models.worker import Worker
+from app.models.inventory import Inventory
 from app.models.machine import Machine
-from app.models.maintenance import Maintenance
-from app.models.forecast import Forecast
-from app.models.optimization_run import OptimizationRun
-from app.schemas.report import ReportRequest, ReportResponse, ReportType, ReportFormat
+from app.models.order import Order
+from app.models.product import Product
+from app.models.worker import Worker
+from app.models.workforce_assignment import WorkforceAssignment
+from app.services.plan_metrics import latest_baseline_plan, machine_utilization_by_machine
 
 router = APIRouter()
 
+Rows = Tuple[List[str], List[list]]
 
-@router.post("", response_model=ReportResponse)
-async def generate_report(
-    request: ReportRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
-):
-    """Generate a report"""
-    report_id = f"RPT-{uuid.uuid4().hex[:8].upper()}"
-    
-    # Generate report in background
-    background_tasks.add_task(
-        _generate_report_file,
-        report_id,
-        request,
-        db
+
+def _val(v):
+    return getattr(v, "value", v)
+
+
+async def _plan_summary(db: AsyncSession, start: Optional[date], end: Optional[date]) -> Rows:
+    plan = await latest_baseline_plan(db)
+    header = ["Metric", "Value"]
+    if not plan:
+        return header, []
+    rows = [
+        ["Plan ID", plan.plan_id],
+        ["Start date", plan.start_date.isoformat()],
+        ["End date", plan.end_date.isoformat()],
+        ["Status", _val(plan.status)],
+        ["Total demand (units)", plan.total_demand],
+        ["Planned production (units)", plan.total_production],
+        ["Total cost", round(float(plan.total_cost or 0), 2)],
+        ["Overtime hours", round(float(plan.total_overtime or 0), 2)],
+        ["Late orders", plan.late_orders],
+        ["Machine utilization %", round(float(plan.machine_utilization or 0), 2)],
+        ["Workforce utilization %", round(float(plan.workforce_utilization or 0), 2)],
+        ["Fulfillment rate %", round(float(plan.fulfillment_rate or 0), 2)],
+    ]
+    for machine_id, util in sorted(machine_utilization_by_machine(plan).items()):
+        rows.append([f"Machine utilization % ({machine_id})", round(float(util), 2)])
+    return header, rows
+
+
+async def _plan_items(db: AsyncSession, start: Optional[date], end: Optional[date]) -> Rows:
+    from app.api.v1.endpoints.planning import _get_plan_items  # avoid import cycle
+
+    header = ["Plan ID", "Order ID", "Product", "Demand", "Planned", "From inventory", "Backlog",
+              "Machine", "Worker", "Shift", "Due date", "Completion date", "Priority", "Status", "Cost"]
+    plan = await latest_baseline_plan(db)
+    if not plan:
+        return header, []
+    rows = [[plan.plan_id, i.order_id, i.product_name, i.demand, i.planned_production, i.from_inventory,
+             i.backlog, i.machine_name, i.worker_name or "Unassigned", i.shift or "", i.due_date,
+             i.completion_date or "", i.priority, i.status, round(i.cost, 2)]
+            for i in await _get_plan_items(plan.id, db)]
+    return header, rows
+
+
+async def _orders(db: AsyncSession, start: Optional[date], end: Optional[date]) -> Rows:
+    stmt = (
+        select(Order, Product.name, Machine.name)
+        .outerjoin(Product, Product.product_id == Order.product_id)
+        .outerjoin(Machine, Machine.machine_id == Order.machine_id)
+        .order_by(Order.date, Order.order_id)
     )
-    
-    return ReportResponse(
-        report_id=report_id,
-        report_type=request.report_type,
-        format=request.format,
-        status="Generating",
-        created_at=datetime.utcnow()
+    if start:
+        stmt = stmt.where(Order.date >= start)
+    if end:
+        stmt = stmt.where(Order.date <= end)
+    header = ["Order ID", "Date", "Product ID", "Product", "Demand", "Production", "Machine",
+              "Worker ID", "Shift", "Due date", "Priority", "Status", "Overtime hours", "Cost"]
+    rows = [[o.order_id, o.date, o.product_id, pname, o.demand, o.production_quantity, mname,
+             o.worker_id, o.shift, o.due_date, _val(o.priority), _val(o.status),
+             o.overtime_hours, round(float(o.production_cost or 0), 2)]
+            for o, pname, mname in (await db.execute(stmt)).all()]
+    return header, rows
+
+
+async def _inventory(db: AsyncSession, start: Optional[date], end: Optional[date]) -> Rows:
+    from app.api.v1.endpoints.inventory import get_inventory  # same numbers as the Inventory page
+
+    header = ["Product ID", "Product", "Current level", "Safety stock", "Reorder point", "Unit cost",
+              "Stock value", "Coverage days", "Status"]
+    listing = await get_inventory(db)
+    rows = [[i.product_id, i.product_name, i.current_level, i.safety_stock, i.reorder_point,
+             round(float(i.unit_cost or 0), 2), round(float(i.unit_cost or 0) * i.current_level, 2),
+             i.coverage_days, _val(i.status)] for i in listing.inventory]
+    return header, rows
+
+
+async def _workforce(db: AsyncSession, start: Optional[date], end: Optional[date]) -> Rows:
+    header = ["Plan ID", "Date", "Worker ID", "Worker", "Machine", "Product", "Shift",
+              "Assigned hours", "Overtime hours", "Skill match", "Status"]
+    plan = await latest_baseline_plan(db)
+    if not plan:
+        return header, []
+    stmt = (
+        select(WorkforceAssignment, Worker.name, Machine.name, Product.name)
+        .join(Worker, Worker.worker_id == WorkforceAssignment.worker_id)
+        .join(Machine, Machine.machine_id == WorkforceAssignment.machine_id)
+        .join(Product, Product.product_id == WorkforceAssignment.product_id)
+        .where(WorkforceAssignment.production_plan_id == plan.id)
+        .order_by(WorkforceAssignment.date, Worker.name)
     )
+    rows = [[plan.plan_id, a.date, a.worker_id, wname, mname, pname, a.shift,
+             round(float(a.assigned_hours or 0), 2), round(float(a.overtime_hours or 0), 2),
+             round(float(a.skill_match or 0), 2), _val(a.status)]
+            for a, wname, mname, pname in (await db.execute(stmt)).all()]
+    return header, rows
 
 
-@router.get("", response_model=List[ReportResponse])
-async def get_reports(
-    report_type: Optional[ReportType] = None,
-    limit: int = 50,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get list of generated reports"""
-    # In a real app, this would query a reports table
-    # For now, return mock data
-    return []
+REPORTS: Dict[str, Dict] = {
+    "plan-summary": {"name": "Plan summary", "description": "KPIs of the latest production plan, incl. utilization per machine", "build": _plan_summary},
+    "plan-items": {"name": "Plan items", "description": "Every order in the latest plan: quantity, machine, worker, shift, backlog, cost", "build": _plan_items},
+    "orders": {"name": "Orders", "description": "All imported orders (optional date filter on order date)", "build": _orders, "date_filter": True},
+    "inventory": {"name": "Inventory", "description": "Stock level, safety stock, reorder point, value and days of cover", "build": _inventory},
+    "workforce-assignments": {"name": "Workforce assignments", "description": "Worker-to-machine assignments of the latest plan with hours and overtime", "build": _workforce},
+}
 
 
-async def _generate_report_file(
+@router.get("")
+async def list_reports(db: AsyncSession = Depends(get_db)):
+    plan = await latest_baseline_plan(db)
+    counts = {
+        "orders": (await db.execute(select(func.count(Order.id)))).scalar() or 0,
+        "inventory": (await db.execute(select(func.count(Inventory.id)))).scalar() or 0,
+    }
+    return {
+        "plan_id": plan.plan_id if plan else None,
+        "plan_window": [plan.start_date, plan.end_date] if plan else None,
+        "reports": [
+            {
+                "id": rid,
+                "name": meta["name"],
+                "description": meta["description"],
+                "format": "csv",
+                "date_filter": bool(meta.get("date_filter")),
+                "rows": counts.get(rid),
+                "available": (counts[rid] > 0) if rid in counts else plan is not None,
+            }
+            for rid, meta in REPORTS.items()
+        ],
+    }
+
+
+@router.get("/{report_id}")
+async def download_report(
     report_id: str,
-    request: ReportRequest,
-    db: AsyncSession
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Background task to generate report file"""
-    try:
-        if request.report_type == ReportType.PRODUCTION:
-            data = await _get_production_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.WORKFORCE:
-            data = await _get_workforce_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.MACHINE_UTILIZATION:
-            data = await _get_machine_utilization_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.MAINTENANCE:
-            data = await _get_maintenance_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.DEMAND_FORECAST:
-            data = await _get_forecast_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.OPTIMIZATION:
-            data = await _get_optimization_report_data(request.start_date, request.end_date, db)
-        elif request.report_type == ReportType.COST:
-            data = await _get_cost_report_data(request.start_date, request.end_date, db)
-        else:
-            data = []
-        
-        df = pd.DataFrame(data)
-        
-        if request.format == ReportFormat.CSV:
-            output = io.StringIO()
-            df.to_csv(output, index=False)
-            content = output.getvalue()
-            # Save to file storage (simplified)
-        else:
-            # PDF generation would go here
-            pass
-        
-    except Exception as e:
-        # Log error
-        pass
-
-
-async def _get_production_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(Order).where(
-        Order.date >= start,
-        Order.date <= end
+    meta = REPORTS.get(report_id.removesuffix(".csv"))
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Unknown report '{report_id}'. Available: {', '.join(REPORTS)}")
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    header, rows = await meta["build"](db, start_date, end_date)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    writer.writerows([["" if v is None else (v.isoformat() if isinstance(v, date) else v) for v in r] for r in rows])
+    rid = report_id.removesuffix(".csv")
+    filename = f"{rid}_{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "X-Row-Count": str(len(rows))},
     )
-    result = await db.execute(stmt)
-    orders = result.scalars().all()
-    
-    return [{
-        "Order ID": o.order_id,
-        "Date": o.date,
-        "Product": o.product_name,
-        "Demand": o.demand,
-        "Production": o.production_quantity,
-        "Machine": o.machine_name,
-        "Due Date": o.due_date,
-        "Priority": o.priority.value,
-        "Status": o.status.value,
-        "Cost": o.production_cost
-    } for o in orders]
-
-
-async def _get_workforce_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(WorkforceAssignment, Worker.name, Machine.name, Product.name).join(
-        Worker, WorkforceAssignment.worker_id == Worker.worker_id
-    ).join(
-        Machine, WorkforceAssignment.machine_id == Machine.machine_id
-    ).join(
-        Product, WorkforceAssignment.product_id == Product.product_id
-    ).where(
-        WorkforceAssignment.date >= start,
-        WorkforceAssignment.date <= end
-    )
-    result = await db.execute(stmt)
-    data = result.all()
-    
-    return [{
-        "Date": a.date,
-        "Worker": w_name,
-        "Machine": m_name,
-        "Product": p_name,
-        "Shift": a.shift,
-        "Hours": a.assigned_hours,
-        "Overtime": a.overtime_hours,
-        "Skill Match": a.skill_match
-    } for a, w_name, m_name, p_name in data]
-
-
-async def _get_machine_utilization_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(Machine).where(Machine.availability == 1)
-    result = await db.execute(stmt)
-    machines = result.scalars().all()
-    
-    return [{
-        "Machine ID": m.machine_id,
-        "Name": m.name,
-        "Type": m.type,
-        "Capacity": m.capacity,
-        "Utilization %": m.utilization,
-        "Status": m.status.value,
-        "Risk Score": m.risk_score
-    } for m in machines]
-
-
-async def _get_maintenance_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(Maintenance).where(
-        Maintenance.start_date >= start,
-        Maintenance.start_date <= end
-    )
-    result = await db.execute(stmt)
-    maintenance = result.scalars().all()
-    
-    return [{
-        "Maintenance ID": m.maintenance_id,
-        "Machine": m.machine_id,
-        "Type": m.type.value,
-        "Status": m.status.value,
-        "Start": m.start_date,
-        "End": m.end_date,
-        "Reason": m.reason,
-        "Cost": m.cost
-    } for m in maintenance]
-
-
-async def _get_forecast_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(Forecast).where(
-        Forecast.forecast_date >= start,
-        Forecast.forecast_date <= end
-    )
-    result = await db.execute(stmt)
-    forecasts = result.scalars().all()
-    
-    return [{
-        "Product": f.product_id,
-        "Forecast Date": f.forecast_date,
-        "Horizon Days": f.forecast_horizon_days,
-        "Predicted Demand": f.predicted_demand,
-        "Lower Bound": f.lower_bound,
-        "Upper Bound": f.upper_bound,
-        "Model": f.model_used.value
-    } for f in forecasts]
-
-
-async def _get_optimization_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(OptimizationRun).where(
-        OptimizationRun.start_date >= start,
-        OptimizationRun.start_date <= end
-    )
-    result = await db.execute(stmt)
-    runs = result.scalars().all()
-    
-    return [{
-        "Run ID": r.run_id,
-        "Status": r.status.value,
-        "Objective Value": r.objective_value,
-        "Solve Time (s)": r.solve_time_seconds,
-        "Total Cost": r.total_cost,
-        "Total Overtime": r.total_overtime,
-        "Late Orders": r.late_orders,
-        "Machine Util %": r.machine_utilization,
-        "Workforce Util %": r.workforce_utilization,
-        "Fulfillment Rate %": r.fulfillment_rate
-    } for r in runs]
-
-
-async def _get_cost_report_data(start: date, end: date, db: AsyncSession) -> List[dict]:
-    stmt = select(Order).where(
-        Order.date >= start,
-        Order.date <= end
-    )
-    result = await db.execute(stmt)
-    orders = result.scalars().all()
-    
-    return [{
-        "Order ID": o.order_id,
-        "Product": o.product_name,
-        "Production Qty": o.production_quantity,
-        "Unit Cost": o.production_cost / max(1, o.production_quantity),
-        "Total Cost": o.production_cost,
-        "Overtime Cost": o.overtime_hours * 500,
-        "Machine": o.machine_name
-    } for o in orders]
-
-
-from datetime import datetime

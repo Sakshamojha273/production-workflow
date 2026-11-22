@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Dict
 from jose import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.security import require_user
 from app.schemas.auth import LoginRequest, TokenResponse, DemoLoginResponse, UserResponse
 
 router = APIRouter()
@@ -28,8 +30,6 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-
-from datetime import datetime
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -69,6 +69,8 @@ async def demo_login():
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user():
-    """Get current user info (mock)"""
+async def get_current_user(claims: Dict = Depends(require_user)):
+    """Current user for a valid bearer token (single demo account)."""
+    if claims.get("sub") != DEMO_USER["email"]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown user")
     return UserResponse(**DEMO_USER)

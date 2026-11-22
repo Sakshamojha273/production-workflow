@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 import type { DashboardResponse, OrderListResponse, Product, Machine, Worker, InventoryItem, Forecast, ProductionPlan, Scenario, DataQualityReport, MaintenanceRecord } from '../types';
 
@@ -95,16 +95,20 @@ export function useOrders(params?: {
   // Serialize params so a new object literal each render doesn't refetch forever.
   const paramsKey = params ? JSON.stringify(params) : '';
 
+  // Drop responses from superseded requests (fast paging/filtering).
+  const latestRequest = useRef(0);
+
   const fetch = useCallback(async () => {
+    const requestId = ++latestRequest.current;
     try {
       setLoading(true);
       setError(null);
       const result = await api.getOrders(paramsKey ? JSON.parse(paramsKey) : undefined);
-      setData(result);
+      if (requestId === latestRequest.current) setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch orders');
+      if (requestId === latestRequest.current) setError(err instanceof Error ? err.message : 'Failed to fetch orders');
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }, [paramsKey]);
 
@@ -144,6 +148,8 @@ export function useMachines() {
   const [data, setData] = useState<Machine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Which plan the utilization figures come from (null = no plan yet).
+  const [meta, setMeta] = useState<{ plan_id: string | null; workforce_utilization?: number }>({ plan_id: null });
 
   const fetch = useCallback(async () => {
     try {
@@ -151,6 +157,7 @@ export function useMachines() {
       setError(null);
       const result = await api.getMachines();
       setData(result.machines);
+      setMeta({ plan_id: result.plan_id ?? null, workforce_utilization: result.workforce_utilization });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch machines');
     } finally {
@@ -162,13 +169,15 @@ export function useMachines() {
     fetch();
   }, [fetch]);
 
-  return { data, loading, error, refetch: fetch };
+  return { data, meta, loading, error, refetch: fetch };
 }
 
 export function useWorkers() {
   const [data, setData] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Which plan the utilization figures come from (null = no plan yet).
+  const [meta, setMeta] = useState<{ plan_id: string | null; workforce_utilization?: number }>({ plan_id: null });
 
   const fetch = useCallback(async () => {
     try {
@@ -176,6 +185,7 @@ export function useWorkers() {
       setError(null);
       const result = await api.getWorkers();
       setData(result.workers);
+      setMeta({ plan_id: result.plan_id ?? null, workforce_utilization: result.workforce_utilization });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch workers');
     } finally {
@@ -187,7 +197,7 @@ export function useWorkers() {
     fetch();
   }, [fetch]);
 
-  return { data, loading, error, refetch: fetch };
+  return { data, meta, loading, error, refetch: fetch };
 }
 
 export function useInventory() {
@@ -508,7 +518,12 @@ export function useRiskDistribution() {
       setLoading(true);
       setError(null);
       const result = await api.getRiskDistribution();
-      setData(result);
+      // The API returns {Low, Medium, High}; the page reads low/medium/high.
+      setData({
+        low: Number(result?.low ?? result?.Low ?? 0),
+        medium: Number(result?.medium ?? result?.Medium ?? 0),
+        high: Number(result?.high ?? result?.High ?? 0),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch risk distribution');
     } finally {

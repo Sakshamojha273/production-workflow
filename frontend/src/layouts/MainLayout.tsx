@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { api } from '../services/api';
 import { cn } from '../utils/helpers';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -70,6 +71,7 @@ const navigation: NavigationItem[] = [
 export function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const navigate = useNavigate();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const location = useLocation();
 
@@ -253,19 +255,27 @@ export function MainLayout() {
             </div>
 
             <div className="flex items-center gap-3">
-              <button className="relative p-2 rounded-lg hover:bg-secondary-100">
+              {/* Notifications and help have no backend yet: shown disabled instead of as dead buttons. */}
+              <button className="p-2 rounded-lg opacity-50 cursor-not-allowed" disabled aria-label="Notifications (coming soon)" title="Notifications (coming soon)">
                 <Bell className="w-5 h-5 text-secondary-600" />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-danger-500 rounded-full" />
               </button>
-              <button className="p-2 rounded-lg hover:bg-secondary-100">
+              <button className="p-2 rounded-lg opacity-50 cursor-not-allowed" disabled aria-label="Help (coming soon)" title="Help (coming soon)">
                 <HelpCircle className="w-5 h-5 text-secondary-600" />
               </button>
-              <div className="hidden sm:flex items-center gap-2 p-2 rounded-lg hover:bg-secondary-100">
+              <div className="hidden sm:flex items-center gap-2 p-2 rounded-lg">
                 <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center">
                   <User className="w-4 h-4 text-primary-700" />
                 </div>
                 <span className="text-sm font-medium text-secondary-700">Admin</span>
-                <LogOut className="w-4 h-4 text-secondary-400" />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-secondary-100"
+                  aria-label="Sign out"
+                  title="Sign out"
+                  onClick={() => { api.clearToken(); navigate('/login'); }}
+                >
+                  <LogOut className="w-4 h-4 text-secondary-500" />
+                </button>
               </div>
             </div>
           </div>

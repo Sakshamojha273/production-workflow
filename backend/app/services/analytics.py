@@ -16,25 +16,35 @@ from app.models.forecast import Forecast
 from app.models.production_plan import ProductionPlan
 from app.models.optimization_run import OptimizationRun
 from app.models.maintenance import Maintenance
+from app.core.config import reference_date, settings
+from app.services.plan_metrics import latest_baseline_plan, machine_utilization_by_machine, worker_metrics
 
 
 class AnalyticsService:
     def __init__(self, db: AsyncSession):
         self.db = db
+        # "Today" for every window below: PLANNING_REFERENCE_DATE when set (so a
+        # historical dataset is analysed as of its planning date), else the
+        # real date. Windows have an upper bound so future-dated rows don't leak in.
+        self.today = reference_date()
     
     async def get_dashboard_kpis(self) -> Dict[str, Any]:
         """Get all KPI cards for dashboard"""
         
-        # Total orders
+        # All imported orders (the headline number) ...
+        all_orders = (await self.db.execute(select(func.count(Order.id)))).scalar() or 0
+        # ... and the ones dated in the last 30 days up to the reference date.
         stmt = select(func.count(Order.id)).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         )
         result = await self.db.execute(stmt)
         total_orders = result.scalar() or 0
         
         # Production planned (last 30 days)
         stmt = select(func.sum(Order.production_quantity)).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         )
         result = await self.db.execute(stmt)
         production_planned = result.scalar() or 0
@@ -64,13 +74,30 @@ class AnalyticsService:
         latest_demand_date = latest_demand_date_result.scalar()
         current_demand = 0
         historical_daily_average = 0.0
-        if latest_demand_date:
+        # "Current Demand" is the demand of one day: the last recorded day on or
+        # before PLANNING_REFERENCE_DATE when that is set (the app's "today"),
+        # otherwise the last day in the data.
+        current_demand_date = latest_demand_date
+        current_demand_basis = "last day in the data"
+        if settings.PLANNING_REFERENCE_DATE and latest_demand_date:
+            current_demand_date = (await self.db.execute(
+                select(func.max(DemandHistory.date)).where(
+                    DemandHistory.date <= settings.PLANNING_REFERENCE_DATE
+                )
+            )).scalar()
+            current_demand_basis = (
+                "PLANNING_REFERENCE_DATE"
+                if current_demand_date == settings.PLANNING_REFERENCE_DATE
+                else f"last recorded day before PLANNING_REFERENCE_DATE {settings.PLANNING_REFERENCE_DATE.isoformat()}"
+            )
+        if current_demand_date:
             current_demand_result = await self.db.execute(
                 select(func.sum(DemandHistory.demand)).where(
-                    DemandHistory.date == latest_demand_date
+                    DemandHistory.date == current_demand_date
                 )
             )
             current_demand = current_demand_result.scalar() or 0
+        if latest_demand_date:
             history_window_result = await self.db.execute(
                 select(
                     func.sum(DemandHistory.demand),
@@ -83,7 +110,19 @@ class AnalyticsService:
             history_total, observed_days = history_window_result.one()
             if observed_days:
                 historical_daily_average = float(history_total or 0) / observed_days
-        forecast_daily_average = demand_forecast / 7
+        # Growth definition shared with the Demand Forecast page: forecast
+        # total / number of forecast days vs. trailing-30-day total / observed days.
+        forecast_days_result = await self.db.execute(
+            select(func.count(func.distinct(Forecast.forecast_date))).join(
+                latest_product_forecasts,
+                and_(
+                    Forecast.product_id == latest_product_forecasts.c.product_id,
+                    Forecast.created_at == latest_product_forecasts.c.latest_created_at,
+                ),
+            ).where(Forecast.forecast_horizon_days <= 7)
+        )
+        forecast_days = forecast_days_result.scalar() or 0
+        forecast_daily_average = demand_forecast / forecast_days if forecast_days else 0.0
         forecast_growth = (
             (forecast_daily_average - historical_daily_average)
             / historical_daily_average * 100
@@ -91,18 +130,16 @@ class AnalyticsService:
             else 0.0
         )
         
-        # Machine utilization
-        stmt = select(func.avg(Machine.utilization)).where(Machine.availability == 1)
-        result = await self.db.execute(stmt)
-        machine_util = result.scalar() or 0
-        
-        # Workforce utilization (from recent plans)
-        stmt = select(func.avg(ProductionPlan.workforce_utilization)).where(
-            ProductionPlan.created_at >= date.today() - timedelta(days=30)
+        # Machine / workforce utilization come from the latest baseline plan
+        # (the same numbers the Production Planning page shows).
+        latest_plan = await latest_baseline_plan(self.db)
+        machine_util = float(latest_plan.machine_utilization or 0) if latest_plan else 0.0
+        workforce_util = float(latest_plan.workforce_utilization or 0) if latest_plan else 0.0
+        util_description = (
+            f"Latest plan {latest_plan.plan_id} ({latest_plan.start_date:%b %d}–{latest_plan.end_date:%b %d})"
+            if latest_plan else "No plan generated yet"
         )
-        result = await self.db.execute(stmt)
-        workforce_util = result.scalar() or 0
-        
+
         # Inventory level
         stmt = select(func.sum(Inventory.current_level))
         result = await self.db.execute(stmt)
@@ -110,7 +147,8 @@ class AnalyticsService:
         
         # Overtime hours (last 30 days)
         stmt = select(func.sum(Order.overtime_hours)).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         )
         result = await self.db.execute(stmt)
         overtime_hours = result.scalar() or 0
@@ -118,25 +156,28 @@ class AnalyticsService:
         # Late orders
         stmt = select(func.count(Order.id)).where(
             Order.status == OrderStatus.DELAYED,
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         )
         result = await self.db.execute(stmt)
         late_orders = result.scalar() or 0
         
         # Calculate trends (compare with previous period)
-        prev_start = date.today() - timedelta(days=60)
-        prev_end = date.today() - timedelta(days=30)
+        prev_start = self.today - timedelta(days=60)
+        prev_end = self.today - timedelta(days=30)
         
-        trends = await self._calculate_trends(prev_start, prev_end, date.today() - timedelta(days=30), date.today())
+        trends = await self._calculate_trends(prev_start, prev_end, self.today - timedelta(days=30), self.today)
         trends["demand_forecast"] = forecast_growth
         
         return {
             "total_orders": {
                 "title": "Total Orders",
-                "value": f"{total_orders:,}",
-                "trend": trends.get("total_orders", 0),
-                "trend_direction": "up" if trends.get("total_orders", 0) > 0 else "down" if trends.get("total_orders", 0) < 0 else "neutral",
-                "description": "Last 30 days",
+                "value": f"{all_orders:,}",
+                # The trend compares 30-day windows, which is not what the
+                # all-time value measures, so none is shown.
+                "trend": None,
+                "trend_direction": "neutral",
+                "description": f"All imported orders · {total_orders:,} in the 30 days to {self.today:%b %d, %Y}",
                 "status": "Healthy"
             },
             "production_planned": {
@@ -144,7 +185,7 @@ class AnalyticsService:
                 "value": f"{production_planned:,}",
                 "trend": trends.get("production_planned", 0),
                 "trend_direction": "up" if trends.get("production_planned", 0) > 0 else "down" if trends.get("production_planned", 0) < 0 else "neutral",
-                "description": "Last 30 days",
+                "description": f"30 days to {self.today:%b %d, %Y}",
                 "status": "Healthy"
             },
             "current_demand": {
@@ -152,7 +193,7 @@ class AnalyticsService:
                 "value": f"{current_demand:,}",
                 "trend": None,
                 "trend_direction": "neutral",
-                "description": f"Most recent recorded day ({latest_demand_date})" if latest_demand_date else "No historical demand",
+                "description": f"Demand on {current_demand_date} ({current_demand_basis})" if current_demand_date else "No historical demand",
                 "status": "Healthy"
             },
             "demand_forecast": {
@@ -168,23 +209,23 @@ class AnalyticsService:
                 "value": f"{forecast_growth:+.1f}%",
                 "trend": forecast_growth,
                 "trend_direction": "up" if forecast_growth > 0 else "down" if forecast_growth < 0 else "neutral",
-                "description": "Forecast vs. recent daily average; estimate",
+                "description": "Forecast daily avg vs. trailing 30-day daily avg",
                 "status": "Healthy"
             },
             "machine_utilization": {
                 "title": "Machine Utilization",
                 "value": f"{machine_util:.1f}%",
-                "trend": trends.get("machine_utilization", 0),
-                "trend_direction": "up" if trends.get("machine_utilization", 0) > 0 else "down" if trends.get("machine_utilization", 0) < 0 else "neutral",
-                "description": "Current average",
+                "trend": None,
+                "trend_direction": "neutral",
+                "description": util_description,
                 "status": "Healthy" if machine_util > 70 else "Warning" if machine_util > 50 else "Critical"
             },
             "workforce_utilization": {
                 "title": "Workforce Utilization",
                 "value": f"{workforce_util:.1f}%",
-                "trend": trends.get("workforce_utilization", 0),
-                "trend_direction": "up" if trends.get("workforce_utilization", 0) > 0 else "down" if trends.get("workforce_utilization", 0) < 0 else "neutral",
-                "description": "Recent plans average",
+                "trend": None,
+                "trend_direction": "neutral",
+                "description": util_description,
                 "status": "Healthy" if workforce_util > 70 else "Warning" if workforce_util > 50 else "Critical"
             },
             "inventory_level": {
@@ -200,7 +241,7 @@ class AnalyticsService:
                 "value": f"{overtime_hours:,}",
                 "trend": trends.get("overtime_hours", 0),
                 "trend_direction": "down" if trends.get("overtime_hours", 0) > 0 else "up" if trends.get("overtime_hours", 0) < 0 else "neutral",
-                "description": "Last 30 days (lower is better)",
+                "description": f"30 days to {self.today:%b %d, %Y} (lower is better)",
                 "status": "Healthy" if overtime_hours < 100 else "Warning" if overtime_hours < 200 else "Critical"
             },
             "late_orders": {
@@ -208,7 +249,7 @@ class AnalyticsService:
                 "value": f"{late_orders:,}",
                 "trend": trends.get("late_orders", 0),
                 "trend_direction": "down" if trends.get("late_orders", 0) > 0 else "up" if trends.get("late_orders", 0) < 0 else "neutral",
-                "description": "Last 30 days (lower is better)",
+                "description": f"30 days to {self.today:%b %d, %Y} (lower is better)",
                 "status": "Healthy" if late_orders < 5 else "Warning" if late_orders < 15 else "Critical"
             }
         }
@@ -233,16 +274,9 @@ class AnalyticsService:
         prev_prod = await self._sum_production(prev_start, prev_end)
         trends["production_planned"] = ((curr_prod - prev_prod) / max(1, prev_prod)) * 100
         
-        # Machine utilization (average over period)
-        curr_machine_util = await self._avg_machine_util(curr_start, curr_end)
-        prev_machine_util = await self._avg_machine_util(prev_start, prev_end)
-        trends["machine_utilization"] = curr_machine_util - prev_machine_util
-        
-        # Workforce utilization
-        curr_workforce_util = await self._avg_workforce_util(curr_start, curr_end)
-        prev_workforce_util = await self._avg_workforce_util(prev_start, prev_end)
-        trends["workforce_utilization"] = curr_workforce_util - prev_workforce_util
-        
+        # Utilization is a property of the latest plan (see get_dashboard_kpis),
+        # so no period-over-period trend is computed for it.
+
         # Inventory level (current vs previous)
         curr_inv = await self._current_inventory()
         prev_inv = await self._inventory_at_date(prev_end)
@@ -259,8 +293,8 @@ class AnalyticsService:
         trends["late_orders"] = ((curr_late - prev_late) / max(1, prev_late)) * 100
         
         # Demand forecast (next 7 vs previous 7)
-        curr_forecast = await self._sum_forecast(date.today(), date.today() + timedelta(days=7))
-        prev_forecast = await self._sum_forecast(date.today() - timedelta(days=7), date.today())
+        curr_forecast = await self._sum_forecast(self.today, self.today + timedelta(days=7))
+        prev_forecast = await self._sum_forecast(self.today - timedelta(days=7), self.today)
         trends["demand_forecast"] = ((curr_forecast - prev_forecast) / max(1, prev_forecast)) * 100
         
         return trends
@@ -373,7 +407,8 @@ class AnalyticsService:
             func.sum(Order.demand).label('total_demand'),
             func.sum(Order.production_quantity).label('total_production')
         ).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         ).group_by(Order.date).order_by(Order.date)
         
         result = await self.db.execute(stmt)
@@ -396,7 +431,8 @@ class AnalyticsService:
             Order.product_id,
             func.sum(Order.production_quantity).label('total_production')
         ).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         ).group_by(Order.product_id).order_by(func.sum(Order.production_quantity).desc())
         
         result = await self.db.execute(stmt)
@@ -421,56 +457,68 @@ class AnalyticsService:
         }
     
     async def _get_machine_utilization_chart(self) -> Dict:
-        """Get machine utilization chart"""
-        stmt = select(Machine.machine_id, Machine.name, Machine.utilization).where(
-            Machine.availability == 1
-        ).order_by(Machine.utilization.desc())
-        
-        result = await self.db.execute(stmt)
-        data = result.all()
-        
-        return {
-            "type": "bar",
-            "data": {
-                "labels": [row.name for row in data],
-                "datasets": [{
-                    "label": "Utilization %",
-                    "data": [round(row.utilization, 1) for row in data],
-                    "backgroundColor": ["#22c55e" if u >= 80 else "#f59e0b" if u >= 60 else "#ef4444" for u in [row.utilization for row in data]]
-                }]
-            }
-        }
-    
-    async def _get_workforce_utilization_chart(self) -> Dict:
-        """Get workforce utilization chart"""
-        stmt = select(Worker.worker_id, Worker.name, Worker.current_hours, Worker.max_hours_per_week).where(
-            Worker.availability == "Available"
+        """Per-machine utilization in the latest baseline plan (planned / available units)."""
+        plan = await latest_baseline_plan(self.db)
+        by_machine = machine_utilization_by_machine(plan)
+        stmt = select(Machine.machine_id, Machine.name).where(Machine.availability == 1)
+        rows = (await self.db.execute(stmt)).all()
+        data = sorted(
+            ((row.name, float(by_machine.get(row.machine_id, 0.0))) for row in rows),
+            key=lambda item: item[1], reverse=True,
         )
-        
-        result = await self.db.execute(stmt)
-        data = result.all()
-        
-        utilizations = [(row.current_hours / max(1, row.max_hours_per_week) * 100) for row in data]
-        
+        values = [round(u, 1) for _, u in data]
         return {
             "type": "bar",
+            "plan_id": plan.plan_id if plan else None,
             "data": {
-                "labels": [row.name for row in data],
+                "labels": [name for name, _ in data],
                 "datasets": [{
                     "label": "Utilization %",
-                    "data": [round(u, 1) for u in utilizations],
-                    "backgroundColor": ["#22c55e" if u >= 80 else "#f59e0b" if u >= 60 else "#ef4444" for u in utilizations]
+                    "data": values,
+                    "backgroundColor": ["#22c55e" if u >= 80 else "#f59e0b" if u >= 60 else "#ef4444" for u in values]
                 }]
             }
         }
-    
+
+    async def _get_workforce_utilization_chart(self) -> Dict:
+        """Per-worker regular-hour utilization in the latest baseline plan.
+
+        Only workers with hours in the plan are charted (top 20), so the chart
+        isn't 150 empty bars."""
+        plan = await latest_baseline_plan(self.db)
+        workers = (await self.db.execute(
+            select(Worker.worker_id, Worker.name, Worker.availability_factor)
+        )).all()
+        metrics = await worker_metrics(
+            self.db, plan, {w.worker_id: (w.availability_factor if w.availability_factor is not None else 1.0) for w in workers}
+        )
+        names = {w.worker_id: w.name for w in workers}
+        data = sorted(
+            ((names.get(wid, wid), m["utilization"]) for wid, m in metrics.items()),
+            key=lambda item: item[1], reverse=True,
+        )[:20]
+        values = [round(u, 1) for _, u in data]
+        return {
+            "type": "bar",
+            "plan_id": plan.plan_id if plan else None,
+            "data": {
+                "labels": [name for name, _ in data],
+                "datasets": [{
+                    "label": "Utilization %",
+                    "data": values,
+                    "backgroundColor": ["#22c55e" if u >= 80 else "#f59e0b" if u >= 60 else "#ef4444" for u in values]
+                }]
+            }
+        }
+
     async def _get_production_cost_trend_chart(self) -> Dict:
         """Get production cost trend"""
         stmt = select(
             Order.date,
             func.avg(Order.production_cost).label('avg_cost')
         ).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         ).group_by(Order.date).order_by(Order.date)
         
         result = await self.db.execute(stmt)
@@ -494,7 +542,8 @@ class AnalyticsService:
             Order.date,
             func.sum(Order.overtime_hours).label('total_overtime')
         ).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         ).group_by(Order.date).order_by(Order.date)
         
         result = await self.db.execute(stmt)
@@ -539,7 +588,8 @@ class AnalyticsService:
             Order.priority,
             func.count(Order.id).label('count')
         ).where(
-            Order.date >= date.today() - timedelta(days=30)
+            Order.date >= self.today - timedelta(days=30),
+            Order.date <= self.today
         ).group_by(Order.priority)
         
         result = await self.db.execute(stmt)
@@ -599,8 +649,8 @@ class AnalyticsService:
             Maintenance.end_date,
             Maintenance.status
         ).where(
-            Maintenance.start_date >= date.today(),
-            Maintenance.start_date <= date.today() + timedelta(days=30)
+            Maintenance.start_date >= self.today,
+            Maintenance.start_date <= self.today + timedelta(days=30)
         ).order_by(Maintenance.start_date).limit(10)
         
         result = await self.db.execute(stmt)
@@ -621,41 +671,42 @@ class AnalyticsService:
         """Get comprehensive analytics summary"""
         
         # Demand growth
-        current_month_demand = await self._sum_demand(date.today().replace(day=1), date.today())
-        last_month_start = (date.today().replace(day=1) - timedelta(days=1)).replace(day=1)
-        last_month_end = date.today().replace(day=1) - timedelta(days=1)
+        current_month_demand = await self._sum_demand(self.today.replace(day=1), self.today)
+        last_month_start = (self.today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        last_month_end = self.today.replace(day=1) - timedelta(days=1)
         last_month_demand = await self._sum_demand(last_month_start, last_month_end)
         demand_growth = ((current_month_demand - last_month_demand) / max(1, last_month_demand)) * 100
         
         # Production fulfillment %
-        total_demand = await self._sum_demand(date.today() - timedelta(days=30), date.today())
-        total_production = await self._sum_production(date.today() - timedelta(days=30), date.today())
+        total_demand = await self._sum_demand(self.today - timedelta(days=30), self.today)
+        total_production = await self._sum_production(self.today - timedelta(days=30), self.today)
         fulfillment_pct = (total_production / max(1, total_demand)) * 100
         
         # Machine utilization
-        machine_util = await self._avg_machine_util(date.today() - timedelta(days=30), date.today())
+        latest_plan = await latest_baseline_plan(self.db)
+        machine_util = float(latest_plan.machine_utilization or 0) if latest_plan else 0.0
         
         # Worker utilization
-        worker_util = await self._avg_workforce_util(date.today() - timedelta(days=30), date.today())
+        worker_util = float(latest_plan.workforce_utilization or 0) if latest_plan else 0.0
         
         # Inventory coverage
         inventory_coverage = await self._calculate_inventory_coverage()
         
         # Overtime %
-        total_hours = await self._sum_production_hours(date.today() - timedelta(days=30), date.today())
-        overtime_hours = await self._sum_overtime(date.today() - timedelta(days=30), date.today())
+        total_hours = await self._sum_production_hours(self.today - timedelta(days=30), self.today)
+        overtime_hours = await self._sum_overtime(self.today - timedelta(days=30), self.today)
         overtime_pct = (overtime_hours / max(1, total_hours)) * 100
         
         # Late order %
-        total_orders = await self._count_orders(date.today() - timedelta(days=30), date.today())
-        late_orders = await self._count_late_orders(date.today() - timedelta(days=30), date.today())
+        total_orders = await self._count_orders(self.today - timedelta(days=30), self.today)
+        late_orders = await self._count_late_orders(self.today - timedelta(days=30), self.today)
         late_order_pct = (late_orders / max(1, total_orders)) * 100
         
         # Production cost
-        avg_cost = await self._avg_production_cost(date.today() - timedelta(days=30), date.today())
+        avg_cost = await self._avg_production_cost(self.today - timedelta(days=30), self.today)
         
         # Avg production time
-        avg_time = await self._avg_production_time(date.today() - timedelta(days=30), date.today())
+        avg_time = await self._avg_production_time(self.today - timedelta(days=30), self.today)
         
         # Machine risk distribution
         risk_dist = await self._get_machine_risk_distribution()
@@ -728,8 +779,8 @@ class AnalyticsService:
     async def _get_avg_daily_demand(self, product_id: str) -> float:
         stmt = select(func.avg(DemandHistory.demand)).where(
             DemandHistory.product_id == product_id,
-            DemandHistory.date >= date.today() - timedelta(days=30),
-            DemandHistory.date <= date.today(),
+            DemandHistory.date >= self.today - timedelta(days=30),
+            DemandHistory.date <= self.today,
         )
         result = await self.db.execute(stmt)
         return float(result.scalar() or 0)

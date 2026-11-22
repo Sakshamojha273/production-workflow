@@ -3,6 +3,10 @@ from typing import Optional
 from datetime import date
 import os
 
+# backend/ directory (…/backend/app/core/config.py -> parents[2]). In the Docker
+# image this resolves to /app, so the default stays /app/models there.
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 class Settings(BaseSettings):
     APP_NAME: str = "SmartPlan AI"
@@ -14,14 +18,14 @@ class Settings(BaseSettings):
     
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # a working day, so a demo session does not expire mid-presentation
     
     CORS_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000"]
     
     UPLOAD_MAX_SIZE: int = 10 * 1024 * 1024  # 10MB
     UPLOAD_ALLOWED_TYPES: list = ["text/csv", "application/csv"]
     
-    ML_MODEL_PATH: str = "/app/models"
+    ML_MODEL_PATH: str = os.path.join(_BACKEND_DIR, "models")
     FORECAST_DEFAULT_HORIZON: int = 7
     FORECAST_MAX_HORIZON: int = 30
     FORECAST_INTERVAL_LEVEL: float = 0.80
@@ -46,3 +50,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+def reference_date() -> date:
+    """The app's "today": PLANNING_REFERENCE_DATE when set, else the real date.
+
+    Used by the importer (open vs. historical orders), the planner defaults,
+    dashboard windows and the maintenance timeline, so they all agree when a
+    historical dataset is demoed.
+    """
+    return settings.PLANNING_REFERENCE_DATE or date.today()

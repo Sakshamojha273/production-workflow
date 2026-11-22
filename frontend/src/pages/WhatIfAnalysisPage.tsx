@@ -14,6 +14,49 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
+/** "+12.5%" when a % change is defined, else the absolute change ("+87"). */
+function formatMetricChange(metric: { change_pct?: number | null; change?: number; baseline?: number; scenario?: number }): string {
+  if (typeof metric.change_pct === 'number') {
+    return `${metric.change_pct >= 0 ? '+' : ''}${metric.change_pct.toFixed(1)}%`;
+  }
+  const delta = typeof metric.change === 'number'
+    ? metric.change
+    : (Number(metric.scenario) || 0) - (Number(metric.baseline) || 0);
+  if (!delta) return '0';
+  return `${delta > 0 ? '+' : ''}${delta.toLocaleString()} (from 0)`;
+}
+
+type Verdict = 'Improvement' | 'Trade-off' | 'Worse' | 'No change';
+
+/**
+ * Overall verdict from fulfilment and cost (same rule as the backend's
+ * scenario_verdict): Improvement only if fulfilment >= baseline AND cost <=
+ * baseline; Worse if both are worse-or-equal; otherwise a Trade-off. Used as a
+ * fallback for comparisons saved before the API returned `verdict`.
+ */
+function scenarioVerdict(metrics: any[] = []): { verdict: Verdict; reason: string } | null {
+  const find = (name: string) => metrics.find((m) => m.metric === name);
+  const ful = find('Fulfillment Rate %');
+  const cost = find('Total Cost');
+  if (!ful || !cost) return null;
+  const fd = Number(ful.change ?? (ful.scenario - ful.baseline)) || 0;
+  const cd = Number(cost.change ?? (cost.scenario - cost.baseline)) || 0;
+  const f = Math.abs(fd) < 1e-9 ? 0 : Math.sign(fd);
+  const c = Math.abs(cd) < 1e-9 ? 0 : Math.sign(cd);
+  const reason = `Fulfilment ${fd >= 0 ? '+' : ''}${fd.toFixed(1)} pts, cost ${formatMetricChange(cost)}`;
+  if (f === 0 && c === 0) return { verdict: 'No change', reason };
+  if (f >= 0 && c <= 0) return { verdict: 'Improvement', reason };
+  if (f <= 0 && c >= 0) return { verdict: 'Worse', reason };
+  return { verdict: 'Trade-off', reason };
+}
+
+const VERDICT_STYLE: Record<Verdict, string> = {
+  Improvement: 'bg-success-100 text-success-700',
+  'Trade-off': 'bg-warning-100 text-warning-700',
+  Worse: 'bg-danger-100 text-danger-700',
+  'No change': 'bg-secondary-100 text-secondary-600',
+};
+
 export function WhatIfAnalysisPage() {
   const { data: scenarios, loading: scenariosLoading, create, run } = useScenarios();
   const { data: plans } = usePlans();
@@ -22,6 +65,7 @@ export function WhatIfAnalysisPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [forecastHorizon, setForecastHorizon] = useState(7);
   const [baselineForecast, setBaselineForecast] = useState<number | null>(null);
   const [forecastError, setForecastError] = useState<string | null>(null);
@@ -98,7 +142,8 @@ export function WhatIfAnalysisPage() {
   };
 
   const completedScenarios = scenarios?.filter(s => s.status?.toLowerCase() === 'completed') || [];
-  const selectedScenario = completedScenarios[0];
+  // Compare shows the scenario whose button was clicked (previously always the first one).
+  const selectedScenario = completedScenarios.find(s => s.scenario_id === selectedScenarioId) || completedScenarios[0];
   const scenarioForecast = baselineForecast === null
     ? null
     : Math.max(0, baselineForecast * (1 + formData.demand_change_pct / 100));
@@ -211,7 +256,7 @@ export function WhatIfAnalysisPage() {
                   </button>
                 )}
                 {scenario.status?.toLowerCase() === 'completed' && (
-                  <button className="btn-secondary text-sm" onClick={() => setActiveTab('compare')}>
+                  <button className="btn-secondary text-sm" onClick={() => { setSelectedScenarioId(scenario.scenario_id); setActiveTab('compare'); }}>
                     Compare
                   </button>
                 )}
@@ -246,6 +291,22 @@ export function WhatIfAnalysisPage() {
           <div className="card">
             <div className="p-4 border-b border-secondary-200">
               <h3 className="text-lg font-semibold text-secondary-900">{selectedScenario.name} vs Baseline</h3>
+              {(() => {
+                const cr = selectedScenario.comparison_results;
+                const computed = scenarioVerdict(cr.metrics);
+                const verdict = (cr.verdict as Verdict | undefined) || computed?.verdict;
+                const reason = cr.verdict_reason || computed?.reason;
+                if (!verdict) return null;
+                return (
+                  <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-secondary-600" data-testid="scenario-verdict">
+                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold', VERDICT_STYLE[verdict] || VERDICT_STYLE['No change'])}>
+                      Overall: {verdict}
+                    </span>
+                    <span>{reason}</span>
+                    <span className="text-secondary-400">· Improvement = fulfilment ≥ baseline and cost ≤ baseline</span>
+                  </p>
+                );
+              })()}
             </div>
             <div className="p-4">
               <div className="table-container">
@@ -265,14 +326,18 @@ export function WhatIfAnalysisPage() {
                         <td className="font-medium">{metric.metric}</td>
                         <td className="text-right">{typeof metric.baseline === 'number' ? metric.baseline.toLocaleString() : metric.baseline}</td>
                         <td className="text-right">{typeof metric.scenario === 'number' ? metric.scenario.toLocaleString() : metric.scenario}</td>
-                        <td className={cn('text-right font-medium', metric.improvement ? 'text-success-600' : 'text-danger-600')}>
-                          {metric.change_pct >= 0 ? '+' : ''}{metric.change_pct.toFixed(1)}%
+                        <td className={cn('text-right font-medium', metric.improvement === true ? 'text-success-600' : metric.improvement === false ? 'text-danger-600' : 'text-secondary-500')}>
+                          {formatMetricChange(metric)}
                         </td>
                         <td>
-                          <span className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium', metric.improvement ? 'bg-success-100 text-success-700' : 'bg-danger-100 text-danger-700')}>
-                            {metric.improvement ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                            {metric.improvement ? 'Improvement' : 'Regression'}
-                          </span>
+                          {metric.improvement === null || metric.improvement === undefined ? (
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-secondary-100 text-secondary-600">No change</span>
+                          ) : (
+                            <span className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium', metric.improvement ? 'bg-success-100 text-success-700' : 'bg-danger-100 text-danger-700')}>
+                              {metric.improvement ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                              {metric.improvement ? 'Better' : 'Worse'}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}

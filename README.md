@@ -144,6 +144,20 @@ npm install
 npm run dev
 ```
 
+The dev server proxies `/api` to `VITE_API_PROXY_TARGET` (default `http://localhost:8000`).
+If the backend runs on another port, set it in `frontend/.env.local` (git-ignored):
+
+```bash
+echo 'VITE_API_PROXY_TARGET=http://localhost:8001' > frontend/.env.local
+```
+
+#### Historical datasets: `PLANNING_REFERENCE_DATE`
+The app's "today" is `PLANNING_REFERENCE_DATE` (backend `.env`) when set, else the real date.
+It decides which orders are open, the default Generate Plan window (`GET /api/planning/defaults`),
+the Dashboard's 30-day windows, inventory "as of" levels and the upcoming-maintenance window.
+For a dataset that ends in the past, set it to a date inside the data (e.g. `PLANNING_REFERENCE_DATE=2026-10-01`)
+and re-upload the CSV.
+
 ## Dataset
 
 The project dataset is `data/raw/Production_Planning_AI_10K_Dataset.csv` (10,000 records). To load it into the application, start the services, sign in using **Demo Login**, open **Data → Upload Dataset**, and select that CSV.
@@ -152,8 +166,9 @@ The importer maps the dataset's source columns to the application's order, produ
 
 - **Availability** is kept fractional (0-1). Each order row stores the source values; each machine and worker gets `availability_factor` = the mean of its rows (the 0/1 `availability` flag on machines means "in service"). The planner multiplies machine capacity and worker regular hours by these factors.
 - **Order status**: orders due on or after the planning reference date (the upload day, or `PLANNING_REFERENCE_DATE` if set) are the open order book and are imported as `Pending`; the planner schedules these. Orders already past due are `Delayed` if `Late_Units > 0`, `Completed` if planned production covers demand, otherwise `In Progress`.
-- **Maintenance**: `Maintenance_Status` values `Scheduled` / `Emergency` become one-day maintenance events per machine and date (`Preventive` / `Emergency` type; `Completed` before the reference date, `Scheduled` from it on). `None` means no maintenance.
-- Safety stock is not in the dataset and is set to zero. Re-uploading updates existing orders (bulk upsert on `Order_ID`).
+- **Maintenance**: `Maintenance_Status` values `Scheduled` / `Emergency` become one-day maintenance events per machine and date (`Preventive` / `Emergency` type; `Completed` before the reference date, `Scheduled` from it on). `None` means no maintenance. Numeric flags are also accepted: `1`/`1.0`/`true`/`yes` = a planned maintenance day (`Scheduled` → `Preventive`), `0`/`0.0`/`false`/`no` and blank = no maintenance. (In `electronics_production_orders_8k.csv` the 0/1 flag is uncorrelated with machine risk, vibration and temperature, so it is treated as routine maintenance, not breakdowns.) Re-uploading replaces the data-derived events for the same machines and dates.
+- **Inventory**: current level = `Inventory_Level` of the latest order on/before the reference date; unit cost = Σ`Production_Cost` / Σ planned quantity; safety stock = the file's `Safety_Stock` if present, else 1.65 × σ(daily demand) × √(mean `Due_Date` − `Date` days); reorder point = mean daily demand × lead time + safety stock. Coverage days = units ÷ average daily demand over the last 28 days. Re-uploading updates existing orders (bulk upsert on `Order_ID`).
+- **Utilization** (Dashboard, Machines, Workforce) comes from the latest generated production plan.
 
 Source fields include order/date/product identifiers, `Process_Type`, `Demand_Qty`, `Planned_Production_Qty`, `Late_Units`, machine capacity and availability, worker department and availability, inventory, production cost, machine sensor readings, priority, due date, and next-day demand.
 
@@ -172,9 +187,16 @@ The lower and upper forecast bounds use the selected model's absolute backtest r
 ## API Endpoints
 
 ### Authentication
-- `POST /api/auth/login` - Login
-- `POST /api/auth/demo-login` - Demo login
-- `GET /api/auth/me` - Current user
+- `POST /api/auth/login` - Login (returns a JWT `access_token`)
+- `POST /api/auth/demo-login` - Demo login (returns a JWT `access_token`)
+- `GET /api/auth/me` - Current user (requires the token)
+
+Every other `/api/*` route requires `Authorization: Bearer <access_token>`
+(`app/core/security.py`); `/health`, `/` and `/docs` stay public. Tokens are
+signed with `SECRET_KEY` from `backend/.env` and last
+`ACCESS_TOKEN_EXPIRE_MINUTES` (default 480). The backend logs a warning at
+startup while `SECRET_KEY` is still the placeholder. In Swagger (`/docs`) use
+**Authorize** with a token from `/api/auth/demo-login`.
 
 ### Dashboard
 - `GET /api/dashboard` - KPIs and charts
@@ -228,8 +250,13 @@ The lower and upper forecast bounds use the selected model's absolute backtest r
 - `GET /api/data/quality/{report_id}` - Single report
 
 ### Reports
-- `POST /api/reports` - Generate report
-- `GET /api/reports` - List reports
+- `GET /api/reports` - Catalogue of CSV reports (with row counts)
+- `GET /api/reports/{id}` - Download a CSV: `plan-summary`, `plan-items`,
+  `workforce-assignments` (latest plan), `inventory`, `orders`
+  (optional `start_date` / `end_date`)
+
+### Settings
+- `GET /api/settings` - Read-only view of the running configuration (no secrets)
 
 ### Maintenance
 - `GET /api/maintenance` - Maintenance records

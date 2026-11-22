@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { format } from 'date-fns';
 import { useMaintenance, useMaintenanceTimeline, useMachines } from '../hooks/useData';
 import { KPICard } from '../components/KPICard';
-import { cn, formatCurrency } from '../utils/helpers';
+import { cn, formatCurrency, downloadFile, toCSV } from '../utils/helpers';
 import {
   Wrench,
   Calendar,
@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 
 export function MaintenancePage() {
-  const { data: maintenance, loading } = useMaintenance();
-  const { data: timeline } = useMaintenanceTimeline(30);
+  const { data: maintenance, loading, refetch } = useMaintenance();
+  const { data: timeline, refetch: refetchTimeline } = useMaintenanceTimeline(30);
   const { data: machines } = useMachines();
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -42,7 +42,18 @@ export function MaintenancePage() {
   const scheduled = maintenance?.filter(m => m.status === 'Scheduled').length || 0;
   const inProgress = maintenance?.filter(m => m.status === 'In Progress').length || 0;
   const completed = maintenance?.filter(m => m.status === 'Completed').length || 0;
-  const thisMonth = maintenance?.filter(m => new Date(m.start_date).getMonth() === new Date().getMonth()).length || 0;
+  const now = new Date();
+  const thisMonth = maintenance?.filter(m => {
+    const d = new Date(m.start_date);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }).length || 0;
+
+  const handleExport = () => {
+    downloadFile(toCSV(
+      ['Maintenance ID', 'Machine ID', 'Machine', 'Type', 'Status', 'Start', 'End', 'Reason', 'Cost'],
+      filteredMaintenance.map(m => [m.maintenance_id, m.machine_id, m.machine_name, m.type, m.status, m.start_date, m.end_date, m.reason, m.cost]),
+    ), 'maintenance.csv');
+  };
 
   return (
     <div className="space-y-6">
@@ -53,15 +64,15 @@ export function MaintenancePage() {
           <p className="text-secondary-500">Track and schedule machine maintenance activities</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-primary">
+          <button className="btn-primary" disabled title="Not available yet: the backend has no API for creating maintenance events">
             <Plus className="w-4 h-4" />
             Schedule Maintenance
           </button>
-          <button className="btn-secondary">
+          <button className="btn-secondary" onClick={handleExport} disabled={!filteredMaintenance.length}>
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-secondary" disabled={loading}>
+          <button className="btn-secondary" onClick={() => { refetch(); refetchTimeline(); }} disabled={loading}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>
@@ -109,9 +120,13 @@ export function MaintenancePage() {
                       {item.reason && ` • ${item.reason}`}
                     </p>
                   </div>
-                  <button className="btn-secondary text-sm">
+                  <button
+                    className="btn-secondary text-sm"
+                    title="Filter the history table to this machine"
+                    onClick={() => { setFilters(f => ({ ...f, machine_id: item.machine_id })); setCurrentPage(1); }}
+                  >
                     <Settings className="w-4 h-4" />
-                    View
+                    History
                   </button>
                 </div>
               ))}

@@ -161,6 +161,29 @@ async def run_scenario(
     return comparison
 
 
+def scenario_verdict(fulfillment_delta: float, cost_delta: float, cost_pct: Optional[float] = None) -> tuple:
+    """Overall verdict from the fulfilment-rate and total-cost deltas.
+
+    Improvement: fulfilment >= baseline AND cost <= baseline (one strictly better).
+    Worse:       fulfilment <= baseline AND cost >= baseline (one strictly worse).
+    Trade-off:   one better, the other worse (e.g. cheaper but fewer orders filled).
+    No change:   both equal.
+    A cost cut that comes from producing less is therefore never an "Improvement".
+    """
+    eps = 1e-9
+    f = 0 if abs(fulfillment_delta) < eps else (1 if fulfillment_delta > 0 else -1)
+    c = 0 if abs(cost_delta) < eps else (1 if cost_delta > 0 else -1)
+    cost_txt = f"{cost_pct:+.1f}%" if cost_pct is not None else f"{cost_delta:+,.0f}"
+    reason = f"Fulfilment {fulfillment_delta:+.1f} pts, cost {cost_txt}"
+    if f == 0 and c == 0:
+        return "No change", reason
+    if f >= 0 and c <= 0:
+        return "Improvement", reason
+    if f <= 0 and c >= 0:
+        return "Worse", reason
+    return "Trade-off", reason
+
+
 def _compare_runs(baseline: OptimizationRun, scenario_run: OptimizationRun, scenario: Scenario) -> ScenarioComparison:
     """Compare two optimization runs"""
     metrics = []
@@ -178,20 +201,33 @@ def _compare_runs(baseline: OptimizationRun, scenario_run: OptimizationRun, scen
         baseline_val = getattr(baseline, attr) or 0
         scenario_val = getattr(scenario_run, attr) or 0
 
-        if baseline_val != 0:
-            change_pct = ((scenario_val - baseline_val) / baseline_val) * 100
-        else:
-            change_pct = 0
+        delta = scenario_val - baseline_val
+        # A % change from a zero baseline is undefined (was reported as 0.0%
+        # even for 0 -> 87 late orders); report None and let the UI show the
+        # absolute change instead.
+        change_pct = (delta / baseline_val) * 100 if baseline_val != 0 else None
 
-        improvement = (change_pct < 0) if lower_better else (change_pct > 0)
+        # None = unchanged (previously labelled a "Regression").
+        if abs(delta) < 1e-9:
+            improvement = None
+        else:
+            improvement = (delta < 0) if lower_better else (delta > 0)
 
         metrics.append({
             "metric": label,
             "baseline": baseline_val,
             "scenario": scenario_val,
-            "change_pct": round(change_pct, 2),
+            "change": round(delta, 2),
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
             "improvement": improvement
         })
+
+    by_label = {m["metric"]: m for m in metrics}
+    verdict, verdict_reason = scenario_verdict(
+        by_label["Fulfillment Rate %"]["change"],
+        by_label["Total Cost"]["change"],
+        by_label["Total Cost"]["change_pct"],
+    )
 
     return ScenarioComparison(
         scenario_id=scenario.scenario_id,
@@ -199,5 +235,7 @@ def _compare_runs(baseline: OptimizationRun, scenario_run: OptimizationRun, scen
         baseline_run_id=baseline.run_id,
         scenario_run_id=scenario_run.run_id,
         metrics=metrics,
+        verdict=verdict,
+        verdict_reason=verdict_reason,
         created_at=datetime.utcnow()
     )

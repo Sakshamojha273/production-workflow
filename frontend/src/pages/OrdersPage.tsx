@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useOrders, useProducts, useMachines } from '../hooks/useData';
 import { cn, formatNumber, formatCurrency, format, getPriorityColor, getOrderStatusColor } from '../utils/helpers';
 import {
@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 
 export function OrdersPage() {
-  const { data, loading, refetch } = useOrders({ page_size: 100 });
   const { data: products } = useProducts();
   const { data: machines } = useMachines();
 
@@ -25,25 +24,35 @@ export function OrdersPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 50;
 
-  const filteredOrders = useMemo(() => {
-    if (!data?.orders) return [];
-    return data.orders.filter(order => {
-      if (filters.search && !order.order_id.toLowerCase().includes(filters.search.toLowerCase()) &&
-          !order.product_name.toLowerCase().includes(filters.search.toLowerCase())) {
-        return false;
-      }
-      if (filters.product_id && order.product_id !== filters.product_id) return false;
-      if (filters.machine_id && order.machine_id !== filters.machine_id) return false;
-      if (filters.priority && order.priority !== filters.priority) return false;
-      if (filters.status && order.status !== filters.status) return false;
-      if (filters.start_date && new Date(order.date) < new Date(filters.start_date)) return false;
-      if (filters.end_date && new Date(order.date) > new Date(filters.end_date)) return false;
-      return true;
-    });
-  }, [data?.orders, filters]);
+  // Debounce free-text search so typing doesn't fire one request per key.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(filters.search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [filters.search]);
 
-  const paginatedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const totalPages = Math.ceil(filteredOrders.length / pageSize);
+  // Any filter change goes back to page 1.
+  const updateFilter = (key: keyof typeof filters, value: string) => {
+    setFilters(f => ({ ...f, [key]: value }));
+    setCurrentPage(1);
+  };
+
+  // Filtering and pagination happen on the server (GET /orders supports
+  // page/page_size and all filters and returns the true total).
+  const queryParams = useMemo(() => {
+    const p: Record<string, string | number> = { page: currentPage, page_size: pageSize };
+    if (debouncedSearch) p.search = debouncedSearch;
+    (['product_id', 'machine_id', 'priority', 'status', 'start_date', 'end_date'] as const).forEach(k => {
+      if (filters[k]) p[k] = filters[k];
+    });
+    return p;
+  }, [currentPage, debouncedSearch, filters]);
+
+  const { data, loading, error, refetch } = useOrders(queryParams);
+
+  const paginatedOrders = data?.orders ?? [];
+  const totalOrders = data?.total ?? 0;
+  const totalPages = data?.total_pages ?? 0;
 
   const handleExport = () => {
     const headers = ['Order ID', 'Date', 'Product', 'Demand', 'Production', 'Machine', 'Due Date', 'Priority', 'Status', 'Cost'];
@@ -67,7 +76,7 @@ export function OrdersPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `orders-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    link.download = `orders-page${currentPage}-${format(new Date(), 'yyyy-MM-dd')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -83,7 +92,7 @@ export function OrdersPage() {
         <div className="flex items-center gap-2">
           <button onClick={handleExport} className="btn-secondary">
             <Download className="w-4 h-4" />
-            Export CSV
+            Export page CSV
           </button>
           <button onClick={refetch} className="btn-secondary" disabled={loading}>
             Refresh
@@ -93,41 +102,42 @@ export function OrdersPage() {
 
       {/* Filters */}
       <div className="card p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-          <div className="relative">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="relative sm:col-span-2 lg:col-span-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-secondary-400" />
             <input
               type="text"
               placeholder="Search orders..."
               value={filters.search}
-              onChange={e => setFilters({ ...filters, search: e.target.value })}
+              onChange={e => updateFilter('search', e.target.value)}
               className="input pl-10"
             />
           </div>
-          <select value={filters.product_id} onChange={e => setFilters({ ...filters, product_id: e.target.value })} className="input">
+          <select value={filters.product_id} onChange={e => updateFilter('product_id', e.target.value)} className="input">
             <option value="">All Products</option>
             {products?.map(p => <option key={p.product_id} value={p.product_id}>{p.name}</option>)}
           </select>
-          <select value={filters.machine_id} onChange={e => setFilters({ ...filters, machine_id: e.target.value })} className="input">
+          <select value={filters.machine_id} onChange={e => updateFilter('machine_id', e.target.value)} className="input">
             <option value="">All Machines</option>
             {machines?.map(m => <option key={m.machine_id} value={m.machine_id}>{m.name}</option>)}
           </select>
-          <select value={filters.priority} onChange={e => setFilters({ ...filters, priority: e.target.value })} className="input">
+          <select value={filters.priority} onChange={e => updateFilter('priority', e.target.value)} className="input">
             <option value="">All Priorities</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
           </select>
-          <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} className="input">
+          <select value={filters.status} onChange={e => updateFilter('status', e.target.value)} className="input">
             <option value="">All Statuses</option>
             <option value="Completed">Completed</option>
             <option value="In Progress">In Progress</option>
             <option value="Pending">Pending</option>
             <option value="Delayed">Delayed</option>
           </select>
-          <div className="flex gap-2">
-            <input type="date" value={filters.start_date} onChange={e => setFilters({ ...filters, start_date: e.target.value })} className="input" placeholder="Start Date" />
-            <input type="date" value={filters.end_date} onChange={e => setFilters({ ...filters, end_date: e.target.value })} className="input" placeholder="End Date" />
+          {/* Date range takes two grid columns so the native date inputs aren't clipped. */}
+          <div className="flex gap-2 sm:col-span-2 min-w-0">
+            <input type="date" aria-label="Start date" title="Start date" value={filters.start_date} onChange={e => updateFilter('start_date', e.target.value)} className="input min-w-0 flex-1" />
+            <input type="date" aria-label="End date" title="End date" value={filters.end_date} onChange={e => updateFilter('end_date', e.target.value)} className="input min-w-0 flex-1" />
           </div>
         </div>
       </div>
@@ -135,8 +145,9 @@ export function OrdersPage() {
       {/* Orders Table */}
       <div className="card">
         <div className="p-4 border-b border-secondary-200 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-secondary-900">Orders ({filteredOrders.length})</h3>
+          <h3 className="text-lg font-semibold text-secondary-900">Orders ({totalOrders.toLocaleString('en-US')})</h3>
           {loading && <span className="text-sm text-secondary-500">Loading...</span>}
+          {error && !loading && <span className="text-sm text-danger-600">{error}</span>}
         </div>
         <div className="table-container">
           <table className="table">
@@ -155,8 +166,8 @@ export function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {paginatedOrders.map((order, index) => (
-                <tr key={index}>
+              {paginatedOrders.map((order) => (
+                <tr key={order.order_id}>
                   <td className="font-mono text-sm">{order.order_id}</td>
                   <td>{format(new Date(order.date), 'MMM d, yyyy')}</td>
                   <td>{order.product_name}</td>
@@ -177,7 +188,7 @@ export function OrdersPage() {
                   <td>{formatCurrency(order.production_cost)}</td>
                 </tr>
               ))}
-              {paginatedOrders.length === 0 && (
+              {paginatedOrders.length === 0 && !loading && (
                 <tr>
                   <td colSpan={10} className="text-center py-8 text-secondary-500">No orders found</td>
                 </tr>
@@ -190,7 +201,7 @@ export function OrdersPage() {
         {totalPages > 1 && (
           <div className="p-4 border-t border-secondary-200 flex items-center justify-between">
             <p className="text-sm text-secondary-500">
-              Page {currentPage} of {totalPages} ({filteredOrders.length} orders)
+              Page {currentPage} of {totalPages.toLocaleString('en-US')} · showing {((currentPage - 1) * pageSize + 1).toLocaleString('en-US')}–{Math.min(currentPage * pageSize, totalOrders).toLocaleString('en-US')} of {totalOrders.toLocaleString('en-US')} orders
             </p>
             <div className="flex items-center gap-2">
               <button

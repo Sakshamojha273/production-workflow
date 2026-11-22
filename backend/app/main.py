@@ -4,12 +4,14 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import init_db, engine
+from app.core.security import warn_if_default_secret
 from app.api import api_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    warn_if_default_secret()
     await init_db()
     yield
     # Shutdown

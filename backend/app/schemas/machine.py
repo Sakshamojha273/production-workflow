@@ -34,3 +34,4 @@ class MachineResponse(BaseModel):
 class MachineListResponse(BaseModel):
     machines: List[MachineResponse]
     total: int
+    plan_id: Optional[str] = None  # plan the utilization figures come from

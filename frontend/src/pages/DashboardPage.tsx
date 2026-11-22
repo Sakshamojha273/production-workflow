@@ -191,12 +191,12 @@ export function DashboardPage() {
         </ChartCard>
 
         {/* Machine Utilization */}
-        <ChartCard title="Machine Utilization" subtitle="Current utilization %" icon={<Gauge className="w-5 h-5" />}>
+        <ChartCard title="Machine Utilization" subtitle="Latest production plan · planned vs available units %" icon={<Gauge className="w-5 h-5" />}>
           <MachineUtilizationChart data={charts.machine_utilization?.data} />
         </ChartCard>
 
         {/* Workforce Utilization */}
-        <ChartCard title="Workforce Utilization" subtitle="Current utilization %" icon={<Users className="w-5 h-5" />}>
+        <ChartCard title="Workforce Utilization" subtitle="Latest production plan · regular hours used % (top 20)" icon={<Users className="w-5 h-5" />}>
           <WorkforceUtilizationChart data={charts.workforce_utilization?.data} />
         </ChartCard>
 

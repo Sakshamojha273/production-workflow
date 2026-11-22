@@ -77,6 +77,29 @@ class PlanItemResponse(BaseModel):
         return "" if value is None else value
 
 
+class WorkerPlanSummary(BaseModel):
+    """Per-worker totals in a plan (from workforce_assignments)."""
+    worker_id: str
+    worker_name: Optional[str] = None
+    hours: float
+    overtime_hours: float
+    utilization: float  # regular hours / (shift hours x availability x days), %
+
+
+class PlanningDefaults(BaseModel):
+    """Suggested Generate Plan window for the loaded data."""
+    reference_date: date
+    reference_date_source: str  # "PLANNING_REFERENCE_DATE" or "today"
+    suggested_start: date
+    suggested_end: date
+    max_horizon_days: int
+    open_orders: int
+    open_orders_due_from: Optional[date] = None
+    open_orders_due_to: Optional[date] = None
+    data_start: Optional[date] = None
+    data_end: Optional[date] = None
+
+
 class PlanningResponse(BaseModel):
     plan_id: str
     optimization_run_id: Optional[str] = None
@@ -92,6 +115,7 @@ class PlanningResponse(BaseModel):
     fulfillment_rate: float
     status: PlanStatus
     items: List[PlanItemResponse] = []
+    worker_summary: List[WorkerPlanSummary] = []
     created_at: datetime
     notes: Optional[Dict[str, Any]] = None
 

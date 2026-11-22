@@ -1,6 +1,8 @@
 import { useWorkers } from '../hooks/useData';
 import { KPICard } from '../components/KPICard';
-import { cn } from '../utils/helpers';
+import { cn, downloadFile, toCSV } from '../utils/helpers';
+import { useNavigate } from 'react-router-dom';
+import type { Worker } from '../types';
 import {
   Users,
   UserCheck,
@@ -14,12 +16,23 @@ import {
 } from 'lucide-react';
 
 export function WorkforcePage() {
-  const { data: workers, loading } = useWorkers();
+  const { data: workers, meta, loading, refetch } = useWorkers();
+  const navigate = useNavigate();
+  // Per-worker utilization comes from the latest production plan (backend).
+  const utilOf = (w: Worker) => w.utilization ?? 0;
 
   const available = workers?.filter(w => w.availability === 'Available').length || 0;
   const unavailable = workers?.filter(w => w.availability === 'Unavailable').length || 0;
   const onLeave = workers?.filter(w => w.availability === 'On Leave').length || 0;
-  const avgUtilization = workers?.reduce((sum, w) => sum + (w.current_hours / Math.max(1, w.max_hours_per_week) * 100), 0) / (workers?.length || 1);
+  // Plan-level figure (same as the Production Planning page and Dashboard).
+  const avgUtilization = meta.workforce_utilization ?? 0;
+
+  const handleExport = () => {
+    downloadFile(toCSV(
+      ['Worker ID', 'Name', 'Department', 'Shift', 'Availability', 'Hours/week (plan)', 'Max Hours', 'Overtime/week (plan)', 'Utilization %', 'Skills'],
+      (workers || []).map(w => [w.worker_id, w.name, w.department, w.shift, w.availability, w.current_hours, w.max_hours_per_week, w.overtime_hours, utilOf(w).toFixed(1), w.skills.map(sk => sk.machine_type).join('; ')]),
+    ), 'workforce.csv');
+  };
 
   const departments = [...new Set(workers?.map(w => w.department) || [])];
 
@@ -30,13 +43,16 @@ export function WorkforcePage() {
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Workforce</h1>
           <p className="text-secondary-500">Manage worker assignments, skills, and availability</p>
+          <p className="text-xs text-secondary-400 mt-1">
+            {meta.plan_id ? `Hours and utilization from latest plan ${meta.plan_id} (hours normalised to a 7-day week)` : 'No production plan yet: generate one on Production Planning to see hours and utilization'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary">
+          <button className="btn-secondary" onClick={handleExport} disabled={!workers?.length}>
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-secondary" disabled={loading}>
+          <button className="btn-secondary" onClick={() => refetch()} disabled={loading}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>
@@ -101,7 +117,7 @@ export function WorkforcePage() {
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-secondary-500">Utilization</span>
-                        <span className="font-medium">{worker.max_hours_per_week > 0 ? ((worker.current_hours / worker.max_hours_per_week) * 100).toFixed(1) : 0}%</span>
+                        <span className="font-medium">{utilOf(worker).toFixed(1)}%</span>
                       </div>
                     </div>
                     {worker.skills.length > 0 && (
@@ -116,9 +132,9 @@ export function WorkforcePage() {
                         </div>
                       </div>
                     )}
-                    <button className="btn-secondary text-sm w-full mt-3">
+                    <button className="btn-secondary text-sm w-full mt-3" onClick={() => navigate('/planning/production')} title="Open this plan's assignments on Production Planning">
                       <Settings className="w-4 h-4" />
-                      View Details
+                      View Assignments
                     </button>
                   </div>
                 ))}
@@ -150,8 +166,8 @@ export function WorkforcePage() {
               </tr>
             </thead>
             <tbody>
-              {workers?.map((worker, index) => (
-                <tr key={index}>
+              {workers?.map((worker) => (
+                <tr key={worker.worker_id}>
                   <td className="font-mono text-sm">{worker.worker_id}</td>
                   <td>{worker.name}</td>
                   <td>{worker.department}</td>
@@ -168,7 +184,7 @@ export function WorkforcePage() {
                   <td>{worker.current_hours}</td>
                   <td>{worker.max_hours_per_week}</td>
                   <td className="text-warning-600 font-medium">{worker.overtime_hours}</td>
-                  <td>{worker.max_hours_per_week > 0 ? ((worker.current_hours / worker.max_hours_per_week) * 100).toFixed(1) : 0}%</td>
+                  <td>{utilOf(worker).toFixed(1)}%</td>
                   <td>
                     <div className="flex flex-wrap gap-1">
                       {worker.skills.slice(0, 3).map((skill, si) => (

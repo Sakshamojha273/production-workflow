@@ -1,6 +1,7 @@
 import { useMachines } from '../hooks/useData';
 import { KPICard } from '../components/KPICard';
-import { cn, getMachineStatusColor, getRiskColor, getRiskCategory } from '../utils/helpers';
+import { cn, getMachineStatusColor, getRiskColor, getRiskCategory, downloadFile, toCSV } from '../utils/helpers';
+import { useNavigate } from 'react-router-dom';
 import {
   Factory,
   Gauge,
@@ -13,7 +14,15 @@ import {
 } from 'lucide-react';
 
 export function MachinesPage() {
-  const { data: machines, loading } = useMachines();
+  const { data: machines, meta, loading, refetch } = useMachines();
+  const navigate = useNavigate();
+
+  const handleExport = () => {
+    downloadFile(toCSV(
+      ['Machine ID', 'Name', 'Type', 'Capacity/h', 'Status', 'Utilization % (plan)', 'Risk', 'Vibration', 'Temperature C', 'Last Maintenance', 'Next Maintenance'],
+      (machines || []).map(m => [m.machine_id, m.name, m.type, m.capacity, m.status, m.utilization.toFixed(1), m.risk_score.toFixed(2), m.vibration, m.temperature_c, m.last_maintenance?.slice(0, 10), m.next_maintenance?.slice(0, 10)]),
+    ), 'machines.csv');
+  };
 
   const operational = machines?.filter(m => m.status === 'Operational').length || 0;
   const maintenance = machines?.filter(m => m.status === 'Maintenance').length || 0;
@@ -27,13 +36,16 @@ export function MachinesPage() {
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Machines</h1>
           <p className="text-secondary-500">Monitor machine status, utilization, and health</p>
+          <p className="text-xs text-secondary-400 mt-1">
+            {meta.plan_id ? `Utilization from latest plan ${meta.plan_id} (planned vs available units)` : 'No production plan yet: generate one on Production Planning to see utilization'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary">
+          <button className="btn-secondary" onClick={handleExport} disabled={!machines?.length}>
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-secondary" disabled={loading}>
+          <button className="btn-secondary" onClick={() => refetch()} disabled={loading}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>
@@ -108,13 +120,13 @@ export function MachinesPage() {
               </div>
 
               <div className="mt-4 pt-4 border-t border-secondary-200 flex gap-2">
-                <button className="btn-secondary text-sm flex-1">
+                <button className="btn-secondary text-sm flex-1" onClick={() => navigate('/analytics/machine-health')} title="Risk and sensor details on Machine Health">
                   <Settings className="w-4 h-4" />
                   Details
                 </button>
-                <button className="btn-outline text-sm flex-1">
+                <button className="btn-outline text-sm flex-1" onClick={() => navigate('/operations/maintenance')} title="Open the maintenance schedule">
                   <Wrench className="w-4 h-4" />
-                  Schedule Maintenance
+                  Maintenance Schedule
                 </button>
               </div>
             </div>

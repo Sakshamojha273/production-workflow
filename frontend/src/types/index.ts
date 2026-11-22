@@ -97,6 +97,8 @@ export interface Worker {
   max_hours_per_week: number;
   current_hours: number;
   overtime_hours: number;
+  /** Regular-hour utilization % in the latest production plan. */
+  utilization?: number;
   skills: WorkerSkill[];
   created_at: string;
   updated_at: string;
@@ -197,8 +199,30 @@ export interface ProductionPlan {
   fulfillment_rate: number;
   status: string;
   items: PlanItem[];
+  worker_summary?: WorkerPlanSummary[];
   created_at: string;
   notes?: Record<string, unknown> | null;
+}
+
+export interface WorkerPlanSummary {
+  worker_id: string;
+  worker_name?: string | null;
+  hours: number;
+  overtime_hours: number;
+  utilization: number;
+}
+
+export interface PlanningDefaults {
+  reference_date: string;
+  reference_date_source: 'PLANNING_REFERENCE_DATE' | 'today';
+  suggested_start: string;
+  suggested_end: string;
+  max_horizon_days: number;
+  open_orders: number;
+  open_orders_due_from?: string | null;
+  open_orders_due_to?: string | null;
+  data_start?: string | null;
+  data_end?: string | null;
 }
 
 export interface Scenario {

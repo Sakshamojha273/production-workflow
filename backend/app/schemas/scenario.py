@@ -34,8 +34,9 @@ class ScenarioComparisonMetric(BaseModel):
     metric: str
     baseline: float
     scenario: float
-    change_pct: float
-    improvement: bool
+    change: float = 0.0  # scenario - baseline
+    change_pct: Optional[float] = None  # None when the baseline is 0
+    improvement: Optional[bool] = None  # None when unchanged
 
 
 class ScenarioComparison(BaseModel):
@@ -44,6 +45,10 @@ class ScenarioComparison(BaseModel):
     baseline_run_id: str
     scenario_run_id: str
     metrics: List[ScenarioComparisonMetric]
+    # Overall verdict on the two outcomes that matter (fulfilment and cost):
+    # "Improvement" | "Trade-off" | "Worse" | "No change". See scenario_verdict().
+    verdict: Optional[str] = None
+    verdict_reason: Optional[str] = None
     created_at: datetime
 
 

@@ -34,6 +34,7 @@ if TEST_DATABASE_URL:
     from app.core.database import Base, get_db
     from app.core.schema_upgrades import UPGRADE_STATEMENTS
     from app.main import app
+    from app.api.v1.endpoints.auth import create_access_token, DEMO_USER
     from app.services.data_processor import DataProcessor
 
 TODAY = date.today()
@@ -105,7 +106,9 @@ async def client(monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+    token = create_access_token({"sub": DEMO_USER["email"], "user_id": DEMO_USER["id"]})
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as http:
         http.sessions = sessions
         yield http
     app.dependency_overrides.clear()
@@ -275,3 +278,67 @@ async def test_scenario_requires_completed_baseline(client):
     # Backwards compatible query-parameter form is still accepted.
     run = await client.post(f"/api/scenario/{scenario['scenario_id']}/run", params={"baseline_run_id": run_id})
     assert run.status_code == 409
+
+
+async def test_api_requires_bearer_token(client):
+    anon = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+    async with anon:
+        assert (await anon.get("/api/orders")).status_code == 401
+        assert (await anon.get("/api/dashboard")).status_code == 401
+        assert (await anon.get("/api/orders", headers={"Authorization": "Bearer not-a-jwt"})).status_code == 401
+        assert (await anon.get("/health")).status_code == 200
+        assert (await anon.post("/api/auth/login", json={"email": "admin@smartplan.ai", "password": "wrong"})).status_code == 401
+        login = await anon.post("/api/auth/demo-login")
+        assert login.status_code == 200
+        token = login.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (await anon.get("/api/orders", headers=headers)).status_code == 200
+        me = await anon.get("/api/auth/me", headers=headers)
+        assert me.status_code == 200 and me.json()["email"] == "admin@smartplan.ai"
+        assert (await anon.get("/api/auth/me")).status_code == 401
+
+
+async def test_machine_sensor_fields_filled_by_upload(client):
+    machines = (await client.get("/api/machines")).json()["machines"]
+    assert machines
+    for m in machines:
+        assert m["vibration"] > 0 and m["temperature_c"] > 0, m
+
+
+async def test_risk_distribution_matches_machine_risk(client):
+    risks = (await client.get("/api/maintenance/machine-risk")).json()
+    dist = (await client.get("/api/maintenance/risk-distribution")).json()
+    expected = {"Low": 0, "Medium": 0, "High": 0}
+    for r in risks:
+        expected[r["risk_category"]] += 1
+    assert dist == expected
+
+
+async def test_current_demand_uses_reference_date(client):
+    kpis = (await client.get("/api/analytics/kpis")).json()
+    current = kpis["current_demand"] if "current_demand" in kpis else next(
+        k for k in kpis.get("kpis", []) if k.get("title") == "Current Demand")
+    assert "PLANNING_REFERENCE_DATE" in current["description"]
+    assert str(REFERENCE) in current["description"] or "before" in current["description"]
+
+
+async def test_csv_reports_and_settings(client):
+    await _generate(client)
+    catalogue = (await client.get("/api/reports")).json()
+    ids = {r["id"] for r in catalogue["reports"]}
+    assert {"plan-summary", "plan-items", "orders", "inventory", "workforce-assignments"} <= ids
+    for rid in ids:
+        response = await client.get(f"/api/reports/{rid}")
+        assert response.status_code == 200, (rid, response.text)
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment" in response.headers["content-disposition"]
+        lines = response.text.strip().splitlines()
+        assert len(lines) >= 2, rid  # header + at least one data row
+    orders = await client.get("/api/reports/orders")
+    assert int(orders.headers["x-row-count"]) == 40
+    assert (await client.get("/api/reports/nope")).status_code == 404
+    settings_view = (await client.get("/api/settings")).json()
+    flat = {i["key"]: i["value"] for g in settings_view["groups"] for i in g["items"]}
+    assert flat["PLANNING_REFERENCE_DATE"] == REFERENCE.isoformat()
+    assert "SECRET_KEY" in flat and settings.SECRET_KEY not in str(settings_view)
+    assert "postgres:" not in flat["DATABASE"] or "@" not in flat["DATABASE"]

@@ -26,6 +26,8 @@ class WorkerResponse(BaseModel):
     max_hours_per_week: int
     current_hours: int
     overtime_hours: int
+    # Regular-hour utilization % in the latest baseline plan (0 if no plan).
+    utilization: float = 0.0
     skills: List[WorkerSkillResponse] = []
     created_at: datetime
     updated_at: datetime
@@ -37,3 +39,5 @@ class WorkerResponse(BaseModel):
 class WorkerListResponse(BaseModel):
     workers: List[WorkerResponse]
     total: int
+    plan_id: Optional[str] = None  # plan the hours/utilization come from
+    workforce_utilization: float = 0.0  # plan-level figure (same as Planning page)

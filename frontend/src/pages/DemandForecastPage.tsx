@@ -151,7 +151,12 @@ export function DemandForecastPage() {
   }, [metrics?.selected_model, productId, products, recentHistory, search, selectedForecasts, sortBy]);
 
   const forecastDemand = selectedForecasts.reduce((sum, item) => sum + item.predicted_demand, 0);
-  const averageDailyDemand = selectedForecasts.length ? forecastDemand / selectedForecasts.length : 0;
+  // Growth definition (shared with the Dashboard KPI in backend analytics.py):
+  // forecast total / number of forecast days, vs. trailing-30-day total /
+  // number of observed days. Forecast rows are per product per day, so the
+  // divisor must be the number of distinct dates, not the number of rows.
+  const forecastDayCount = new Set(selectedForecasts.map((item) => item.forecast_date)).size;
+  const averageDailyDemand = forecastDayCount ? forecastDemand / forecastDayCount : 0;
   const actualDailyTotals = new Map<string, number>();
   recentHistory.forEach((point) => {
     actualDailyTotals.set(point.date, (actualDailyTotals.get(point.date) || 0) + point.demand);

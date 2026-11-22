@@ -15,10 +15,11 @@ import {
 } from 'lucide-react';
 
 export function MachineHealthPage() {
-  const { data: machines } = useMachines();
-  const { data: riskData } = useMachineRisk();
-  const { data: riskDist } = useRiskDistribution();
-  const { data: maintenanceTimeline } = useMaintenanceTimeline(30);
+  const { data: machines, refetch: refetchMachines } = useMachines();
+  const { data: riskData, loading: riskLoading, refetch: refetchRisk } = useMachineRisk();
+  const { data: riskDist, refetch: refetchRiskDist } = useRiskDistribution();
+  const { data: maintenanceTimeline, refetch: refetchTimeline } = useMaintenanceTimeline(30);
+  const refreshAll = () => { refetchMachines(); refetchRisk(); refetchRiskDist(); refetchTimeline(); };
 
   // Merge risk data with machines
   const machineRiskMap = new Map(riskData?.map(r => [r.machine_id, r]) || []);
@@ -47,7 +48,7 @@ export function MachineHealthPage() {
           <h1 className="text-2xl font-bold text-secondary-900">Machine Health</h1>
           <p className="text-secondary-500">Monitor machine risk, utilization, and maintenance</p>
         </div>
-        <button className="btn-secondary">
+        <button className="btn-secondary" onClick={refreshAll} disabled={riskLoading}>
           <RefreshCw className="w-4 h-4" />
           Refresh
         </button>
@@ -56,7 +57,12 @@ export function MachineHealthPage() {
       {/* Risk Distribution KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {riskCategories.map(cat => {
-          const count = riskDist?.[cat.key] || enrichedMachines?.filter(m => m.risk?.risk_category?.toLowerCase() === cat.key).length || 0;
+          // Count the same classification the cards below display (live
+          // /machine-risk analysis); the server distribution uses that same
+          // analysis and is only a fallback while it loads.
+          const count = riskData?.length
+            ? (enrichedMachines?.filter(m => m.risk?.risk_category?.toLowerCase() === cat.key).length || 0)
+            : (riskDist?.[cat.key] ?? 0);
           return (
             <KPICard key={cat.key} title={cat.label} value={count.toString()} icon={cat.icon} iconColor={cat.color} />
           );
@@ -88,15 +94,15 @@ export function MachineHealthPage() {
 
               <div className="grid grid-cols-3 gap-4 mb-4 p-4 bg-secondary-50 rounded-lg">
                 <div className="text-center">
-                  <p className="text-2xl font-bold text-secondary-900">{machine.risk_score.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-secondary-900">{Number(risk?.risk_score ?? machine.risk_score).toFixed(2)}</p>
                   <p className="text-xs text-secondary-500">Risk Score</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-2xl font-bold text-secondary-900">{machine.vibration.toFixed(3)}</p>
+                  <p className="text-2xl font-bold text-secondary-900">{Number((risk as { current_vibration?: number })?.current_vibration ?? machine.vibration).toFixed(3)}</p>
                   <p className="text-xs text-secondary-500">Vibration</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-2xl font-bold text-secondary-900">{machine.temperature_c.toFixed(1)}°C</p>
+                  <p className="text-2xl font-bold text-secondary-900">{Number((risk as { current_temperature?: number })?.current_temperature ?? machine.temperature_c).toFixed(1)}°C</p>
                   <p className="text-xs text-secondary-500">Temperature</p>
                 </div>
               </div>
@@ -195,7 +201,7 @@ export function MachineHealthPage() {
                     <td>{machine.utilization.toFixed(1)}%</td>
                     <td>{machine.vibration.toFixed(3)}</td>
                     <td>{machine.temperature_c.toFixed(1)}°C</td>
-                    <td className="font-mono">{machine.risk_score.toFixed(2)}</td>
+                    <td className="font-mono">{Number(risk?.risk_score ?? machine.risk_score).toFixed(2)}</td>
                     <td>
                       <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', getRiskColor(riskCat))}>
                         {riskCat}

@@ -11,14 +11,20 @@ import os
 
 from app.models.order import Order
 from app.models.machine import Machine
-from app.core.config import settings
+from app.core.config import settings, reference_date
 
 
 class MachineRiskAnalyzer:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.model_path = settings.ML_MODEL_PATH
-        os.makedirs(self.model_path, exist_ok=True)
+        # The analyzer refits IsolationForest per request and never needs the
+        # directory to exist, so an unwritable ML_MODEL_PATH (e.g. the Docker
+        # default /app/models on a dev machine) must not turn into an HTTP 500.
+        try:
+            os.makedirs(self.model_path, exist_ok=True)
+        except OSError:
+            self.model_path = None
     
     async def analyze_machine_risk(self, machine_ids: Optional[List[str]] = None) -> List[Dict]:
         """Analyze risk for machines based on sensor data"""
@@ -70,11 +76,12 @@ class MachineRiskAnalyzer:
         """Get machine sensor readings from the most recent 30 days of order data.
 
         Machine attributes come from the ``machines`` table (orders only carry
-        the machine ID).  The window ends at today or at the latest recorded
+        the machine ID).  The window ends at the app's reference date
+        (PLANNING_REFERENCE_DATE, else today) or at the latest recorded
         order date, whichever is earlier, so future-dated rows are never used
         as the "current" reading.
         """
-        latest_stmt = select(func.max(Order.date)).where(Order.date <= date.today())
+        latest_stmt = select(func.max(Order.date)).where(Order.date <= reference_date())
         if machine_ids:
             latest_stmt = latest_stmt.where(Order.machine_id.in_(machine_ids))
         window_end = (await self.db.execute(latest_stmt)).scalar()
@@ -175,13 +182,7 @@ class MachineRiskAnalyzer:
         
         risk_score = min(1.0, (vib_norm * 0.3 + temp_norm * 0.3 + trend_factor + anomaly_factor + maint_factor + current_risk * 0.2))
         
-        # Risk category
-        if risk_score < 0.3:
-            risk_category = 'Low'
-        elif risk_score < 0.6:
-            risk_category = 'Medium'
-        else:
-            risk_category = 'High'
+        risk_category = self.risk_category(round(float(risk_score), 3))
         
         # Overall trend
         if vibration_trend > 0.01 and temperature_trend > 0.5:
@@ -213,30 +214,43 @@ class MachineRiskAnalyzer:
         slope = np.polyfit(x, y, 1)[0]
         return float(slope)
     
+    @staticmethod
+    def risk_category(score: float) -> str:
+        """Single risk classification used by the cards, the summary and the API."""
+        score = float(score or 0)
+        if score < 0.3:
+            return 'Low'
+        if score < 0.6:
+            return 'Medium'
+        return 'High'
+
     async def get_risk_distribution(self) -> Dict:
-        """Get distribution of risk categories across all machines"""
-        stmt = select(Machine)
-        result = await self.db.execute(stmt)
-        machines = result.scalars().all()
-        
+        """Distribution of risk categories across all machines.
+
+        Uses the same live analysis as /machine-risk (which also refreshes the
+        stored Machine.risk_score), so the summary can never disagree with the
+        per-machine cards. Machines with no recent sensor data fall back to
+        their stored score.
+        """
+        analysed = {r['machine_id']: r['risk_category'] for r in await self.analyze_machine_risk()}
+        machines = (await self.db.execute(select(Machine))).scalars().all()
+
         distribution = {'Low': 0, 'Medium': 0, 'High': 0}
         for m in machines:
-            if m.risk_score < 0.3:
-                distribution['Low'] += 1
-            elif m.risk_score < 0.6:
-                distribution['Medium'] += 1
-            else:
-                distribution['High'] += 1
-        
+            category = analysed.get(m.machine_id) or self.risk_category(m.risk_score)
+            distribution[category] += 1
         return distribution
     
     async def get_maintenance_timeline(self, days: int = 30) -> List[Dict]:
         """Get upcoming maintenance timeline"""
         from app.models.maintenance import Maintenance, MaintenanceStatus
         
+        # Anchor "upcoming" to the app's reference date (PLANNING_REFERENCE_DATE
+        # or today) so historical datasets still show their upcoming events.
+        start = reference_date()
         stmt = select(Maintenance).where(
-            Maintenance.start_date >= date.today(),
-            Maintenance.start_date <= date.today() + timedelta(days=days),
+            Maintenance.start_date >= start,
+            Maintenance.start_date <= start + timedelta(days=days),
             Maintenance.status.in_([MaintenanceStatus.SCHEDULED, MaintenanceStatus.IN_PROGRESS])
         ).order_by(Maintenance.start_date)
         

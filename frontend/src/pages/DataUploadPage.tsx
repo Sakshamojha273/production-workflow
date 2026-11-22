@@ -18,6 +18,7 @@ export function DataUploadPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<any>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [previewData, setPreviewData] = useState<any[]>([]);
@@ -71,12 +72,12 @@ export function DataUploadPage() {
   const handleUpload = async () => {
     if (!selectedFile) return;
     setUploading(true);
+    setUploadError(null);
     try {
-      const result = await upload(selectedFile);
+      const result = await upload(selectedFile); // the hook refetches the report list
       setUploadResult(result);
-      refetch();
     } catch (error) {
-      console.error('Upload failed:', error);
+      setUploadError(error instanceof Error ? error.message : 'Upload failed');
     } finally {
       setUploading(false);
     }
@@ -218,6 +219,11 @@ export function DataUploadPage() {
               </div>
             )}
 
+            {uploadError && (
+              <p role="alert" className="rounded-lg border border-danger-200 bg-danger-50 p-3 text-sm text-danger-700">
+                Upload failed: {uploadError}
+              </p>
+            )}
             <div className="flex justify-end gap-3 pt-4 border-t border-secondary-200">
               <button onClick={clearFile} className="btn-secondary">
                 Cancel
