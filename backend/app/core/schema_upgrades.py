@@ -18,6 +18,17 @@ are introduced.
 UPGRADE_STATEMENTS = [
     "ALTER TABLE machines ADD COLUMN IF NOT EXISTS availability_factor DOUBLE PRECISION DEFAULT 1.0",
     "ALTER TABLE workers ADD COLUMN IF NOT EXISTS availability_factor DOUBLE PRECISION DEFAULT 1.0",
+    # OrderPriority gained CRITICAL (the dataset's "Critical" orders used to be
+    # stored as MEDIUM). Additive: appends one enum label; existing rows are kept.
+    # Re-upload the dataset to store those orders as CRITICAL.
+    """
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'orderpriority') THEN
+        ALTER TYPE orderpriority ADD VALUE IF NOT EXISTS 'CRITICAL';
+    END IF;
+END $$;
+""",
 ]
 
 _WIDEN_TO_DOUBLE = [

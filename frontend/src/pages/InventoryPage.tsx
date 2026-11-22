@@ -1,7 +1,7 @@
 import { format } from 'date-fns';
 import { useInventory } from '../hooks/useData';
 import { KPICard } from '../components/KPICard';
-import { cn, formatNumber, formatCurrency, downloadFile, toCSV } from '../utils/helpers';
+import { cn, formatNumber, formatCurrency, downloadFile, toCSV, parseServerTimestamp } from '../utils/helpers';
 import {
   Box,
   Package,
@@ -125,7 +125,7 @@ export function InventoryPage() {
                       {item.status}
                     </span>
                   </td>
-                  <td className="text-sm text-secondary-500">{format(new Date(item.last_updated), 'MMM d, yyyy')}</td>
+                  <td className="text-sm text-secondary-500">{format(parseServerTimestamp(item.last_updated), 'MMM d, yyyy')}</td>
                 </tr>
               ))}
             </tbody>

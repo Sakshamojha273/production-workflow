@@ -8,6 +8,7 @@ class OrderPriority(str, Enum):
     LOW = "Low"
     MEDIUM = "Medium"
     HIGH = "High"
+    CRITICAL = "Critical"
 
 
 class OrderStatus(str, Enum):

@@ -64,6 +64,8 @@ export function WhatIfAnalysisPage() {
   const [activeTab, setActiveTab] = useState<'create' | 'compare'>('create');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const openCreateModal = () => { setCreateError(null); setShowCreateModal(true); };
   const [running, setRunning] = useState<string | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [forecastHorizon, setForecastHorizon] = useState(7);
@@ -99,6 +101,7 @@ export function WhatIfAnalysisPage() {
 
   const handleCreate = async () => {
     setCreating(true);
+    setCreateError(null);
     try {
       await create(formData);
       setShowCreateModal(false);
@@ -115,6 +118,8 @@ export function WhatIfAnalysisPage() {
       });
     } catch (error) {
       console.error('Failed to create scenario:', error);
+      // Keep the dialog open and say why (e.g. a value outside the allowed range).
+      setCreateError(error instanceof Error ? error.message : 'Failed to create scenario');
     } finally {
       setCreating(false);
     }
@@ -162,7 +167,7 @@ export function WhatIfAnalysisPage() {
           <h1 className="text-2xl font-bold text-secondary-900">What-If Analysis</h1>
           <p className="text-secondary-500">Simulate scenarios and compare outcomes</p>
         </div>
-        <button onClick={() => setShowCreateModal(true)} className="btn-primary" disabled={creating}>
+        <button onClick={openCreateModal} className="btn-primary" disabled={creating}>
           <Plus className="w-4 h-4" />
           Create Scenario
         </button>
@@ -268,7 +273,7 @@ export function WhatIfAnalysisPage() {
               <BarChart3 className="w-16 h-16 text-secondary-300 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-secondary-900 mb-2">No scenarios created</h3>
               <p className="text-secondary-500 mb-4">Create a scenario to simulate what-if scenarios</p>
-              <button onClick={() => setShowCreateModal(true)} className="btn-primary">
+              <button onClick={openCreateModal} className="btn-primary">
                 <Plus className="w-4 h-4" />
                 Create Scenario
               </button>
@@ -413,6 +418,11 @@ export function WhatIfAnalysisPage() {
                   </label>
                 ))}
               </div>
+              {createError && (
+                <p role="alert" className="rounded-lg border border-danger-200 bg-danger-50 p-3 text-sm text-danger-700">
+                  Could not create scenario: {createError}
+                </p>
+              )}
               <div className="flex justify-end gap-3">
                 <button type="button" className="btn-secondary" onClick={() => setShowCreateModal(false)}>Cancel</button>
                 <button type="submit" className="btn-primary" disabled={creating}>

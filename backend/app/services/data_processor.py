@@ -80,6 +80,12 @@ def planning_reference_date() -> date:
     return reference_date()
 
 
+# A failed upload has no column profile; store empty (not NULL) values so the
+# report still matches DataUploadResponse / DataQualityResponse.
+def _empty_profile() -> dict:
+    return {"missing_by_column": {}, "column_types": {}, "sample_data": []}
+
+
 class DataProcessor:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -96,6 +102,7 @@ class DataProcessor:
                 total_columns=0,
                 quality_score=0.0,
                 status=DataQualityStatus.FAILED,
+                **_empty_profile(),
                 error_message=f"Failed to parse CSV: {str(e)}"
             )
             self.db.add(report)
@@ -120,6 +127,7 @@ class DataProcessor:
                 total_columns=len(df.columns),
                 quality_score=0.0,
                 status=DataQualityStatus.FAILED,
+                **_empty_profile(),
                 error_message=f"Failed to parse CSV: {reason}",
             )
             self.db.add(report)
@@ -136,6 +144,7 @@ class DataProcessor:
                 total_columns=len(df.columns),
                 quality_score=0.0,
                 status=DataQualityStatus.FAILED,
+                **_empty_profile(),
                 error_message=str(exc),
             )
             self.db.add(report)

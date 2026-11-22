@@ -123,6 +123,7 @@ export function OrdersPage() {
           </select>
           <select value={filters.priority} onChange={e => updateFilter('priority', e.target.value)} className="input">
             <option value="">All Priorities</option>
+            <option value="Critical">Critical</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>

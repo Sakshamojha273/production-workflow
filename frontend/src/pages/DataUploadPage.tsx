@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { format } from 'date-fns';
 import { useDataQuality } from '../hooks/useData';
-import { cn, formatNumber } from '../utils/helpers';
+import { cn, formatNumber, parseServerTimestamp } from '../utils/helpers';
 import {
   Upload,
   FileText,
@@ -38,6 +38,8 @@ export function DataUploadPage() {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      setUploadError(null);
+      setUploadResult(null);
       setSelectedFile(e.dataTransfer.files[0]);
       previewFile(e.dataTransfer.files[0]);
     }
@@ -45,6 +47,8 @@ export function DataUploadPage() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      setUploadError(null);
+      setUploadResult(null);
       setSelectedFile(e.target.files[0]);
       previewFile(e.target.files[0]);
     }
@@ -86,6 +90,7 @@ export function DataUploadPage() {
   const clearFile = () => {
     setSelectedFile(null);
     setUploadResult(null);
+    setUploadError(null);
     setShowPreview(false);
     setPreviewData([]);
   };
@@ -285,7 +290,7 @@ export function DataUploadPage() {
                       {getStatusIcon(report.status)} {report.status}
                     </span>
                   </td>
-                  <td className="text-sm text-secondary-500">{format(new Date(report.created_at), 'MMM d, yyyy HH:mm')}</td>
+                  <td className="text-sm text-secondary-500">{format(parseServerTimestamp(report.created_at), 'MMM d, yyyy HH:mm')}</td>
                 </tr>
               ))}
               {reports?.length === 0 && (

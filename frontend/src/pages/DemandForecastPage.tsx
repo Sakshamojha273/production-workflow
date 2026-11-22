@@ -17,7 +17,7 @@ import { ChartCard } from '../components/ChartCard';
 import { KPICard } from '../components/KPICard';
 import { api } from '../services/api';
 import type { DemandHistoryPoint, Forecast, ForecastMetrics, Product } from '../types';
-import { formatNumber } from '../utils/helpers';
+import { formatNumber, peakDailyTotal } from '../utils/helpers';
 import { useProducts } from '../hooks/useData';
 
 const HORIZONS = [7, 14, 30] as const;
@@ -165,10 +165,9 @@ export function DemandForecastPage() {
     ? [...actualDailyTotals.values()].reduce((sum, value) => sum + value, 0) / actualDailyTotals.size
     : 0;
   const growth = actualAverage ? ((averageDailyDemand - actualAverage) / actualAverage) * 100 : null;
-  const peakForecast = selectedForecasts.reduce<Forecast | null>(
-    (peak, item) => (!peak || item.predicted_demand > peak.predicted_demand ? item : peak),
-    null,
-  );
+  // Peak day = the date with the highest total across the selected products
+  // (with "All Products" the rows are per product per day, so sum them first).
+  const peakForecast = peakDailyTotal(selectedForecasts);
   const selectedMetrics = metrics?.selected_model ? metrics.metrics[metrics.selected_model] : null;
 
   return (
@@ -258,7 +257,7 @@ export function DemandForecastPage() {
             <KPICard title="Forecast Demand" value={formatNumber(forecastDemand)} icon={<TrendingUp className="h-5 w-5" />} iconColor="bg-purple-100 text-purple-600" description={`Total over ${horizon} days`} />
             <KPICard title="Average Daily Forecast" value={formatNumber(averageDailyDemand)} icon={<Calendar className="h-5 w-5" />} iconColor="bg-blue-100 text-blue-600" description="Based on generated daily forecasts" />
             <KPICard title="Expected Demand Growth" value={growth === null ? '—' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} iconColor="bg-green-100 text-green-600" description="Estimate vs. trailing 30-day daily average; not guaranteed business growth" />
-            <KPICard title="Peak Demand Day" value={peakForecast ? formatNumber(peakForecast.predicted_demand) : '—'} icon={<Package className="h-5 w-5" />} iconColor="bg-orange-100 text-orange-600" description={peakForecast?.forecast_date || 'Generate a forecast'} />
+            <KPICard title="Peak Demand Day" value={peakForecast ? formatNumber(peakForecast.total) : '—'} icon={<Package className="h-5 w-5" />} iconColor="bg-orange-100 text-orange-600" description={peakForecast?.date || 'Generate a forecast'} />
             <KPICard title="Backtest WAPE" value={selectedMetrics?.wape == null ? '—' : `${selectedMetrics.wape.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} iconColor="bg-indigo-100 text-indigo-600" description="Lower is better; historical time-based test" />
             <KPICard title="Selected Model" value={metrics?.selected_model || '—'} icon={<Brain className="h-5 w-5" />} iconColor="bg-pink-100 text-pink-600" description="Selected by backtest WAPE" />
           </div>

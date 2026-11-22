@@ -116,3 +116,52 @@ def test_risk_category_thresholds():
 
     assert [MachineRiskAnalyzer.risk_category(x) for x in (0, 0.299, 0.3, 0.599, 0.6, 1)] == [
         "Low", "Low", "Medium", "Medium", "High", "High"]
+
+
+# --- QA pass 2026-11-22: B2 (failed upload must store a readable report) ---
+
+class _FakeSession:
+    def __init__(self):
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def commit(self):
+        pass
+
+
+@pytest.mark.parametrize("content", [
+    b"Order_ID,Date,Foo\nX1,2026-01-01,3\n",   # missing required columns
+    b"",                                        # empty file
+    bytes(range(128, 256)) * 4,                 # not text
+], ids=["missing-columns", "empty", "binary"])
+async def test_failed_upload_report_matches_response_schema(content):
+    from app.schemas.data import DataQualityResponse, DataUploadResponse
+    session = _FakeSession()
+    report = await DataProcessor(session).process_csv(content, "bad.csv")
+    report.created_at = report.created_at or __import__("datetime").datetime.utcnow()
+    assert report.status.value == "Failed" and report.error_message
+    assert report.missing_by_column == {} and report.column_types == {} and report.sample_data == []
+    DataQualityResponse.model_validate(report, from_attributes=True)
+    DataUploadResponse.model_validate(report, from_attributes=True)
+
+
+def test_quality_response_tolerates_legacy_null_profile():
+    from datetime import datetime
+    from app.schemas.data import DataQualityResponse
+    legacy = SimpleNamespace(
+        report_id="r", filename="f.csv", total_rows=0, total_columns=0, missing_values=None,
+        duplicate_rows=None, invalid_records=None, outliers=None, quality_score=None,
+        missing_by_column=None, column_types=None, status="Failed", error_message="x",
+        created_at=datetime(2026, 11, 22, 6, 25), completed_at=None,
+    )
+    parsed = DataQualityResponse.model_validate(legacy, from_attributes=True)
+    assert parsed.missing_by_column == {} and parsed.missing_values == 0 and parsed.quality_score == 0.0
+
+
+def test_critical_priority_enum_and_weight():
+    from app.models.order import OrderPriority
+    from app.optimization.planning_model import DEFAULT_PRIORITY_WEIGHTS
+    assert OrderPriority("Critical") is OrderPriority.CRITICAL
+    assert DEFAULT_PRIORITY_WEIGHTS["Critical"] > DEFAULT_PRIORITY_WEIGHTS["High"]

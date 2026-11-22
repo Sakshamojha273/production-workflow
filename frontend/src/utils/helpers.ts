@@ -29,6 +29,19 @@ export function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
 }
 
+/**
+ * Parse an API timestamp. The backend stores UTC as naive datetimes and sends
+ * them without an offset ("2026-11-22T06:25:00"), which `new Date()` would read
+ * as local time. Treat a date-time string with no zone as UTC so it renders in
+ * the user's own timezone. Date-only strings and zoned strings are unchanged.
+ */
+export function parseServerTimestamp(value: string | Date): Date {
+  if (value instanceof Date) return value;
+  const hasTime = /T\d{2}:\d{2}/.test(value);
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  return new Date(hasTime && !hasZone ? `${value}Z` : value);
+}
+
 export function formatDate(date: string | Date): string {
   return new Date(date).toLocaleDateString('en-US', {
     year: 'numeric',
@@ -38,7 +51,7 @@ export function formatDate(date: string | Date): string {
 }
 
 export function formatDateTime(date: string | Date): string {
-  return new Date(date).toLocaleDateString('en-US', {
+  return parseServerTimestamp(date).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -182,4 +195,16 @@ export function parseCSV(csv: string): any[] {
       return obj;
     }, {} as any);
   });
+}
+/** Highest daily total across rows that may hold several products per date. */
+export function peakDailyTotal(
+  rows: { forecast_date: string; predicted_demand: number }[],
+): { date: string; total: number } | null {
+  const totals = new Map<string, number>();
+  rows.forEach((row) => totals.set(row.forecast_date, (totals.get(row.forecast_date) || 0) + row.predicted_demand));
+  let peak: { date: string; total: number } | null = null;
+  for (const [date, total] of totals) {
+    if (!peak || total > peak.total) peak = { date, total };
+  }
+  return peak;
 }

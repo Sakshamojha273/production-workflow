@@ -441,6 +441,8 @@ export function useDataQuality() {
       return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload dataset');
+      // A rejected file is still recorded as a Failed report; show it in the history.
+      await fetch().catch(() => undefined);
       throw err;
     } finally {
       setLoading(false);

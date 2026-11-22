@@ -342,3 +342,63 @@ async def test_csv_reports_and_settings(client):
     assert flat["PLANNING_REFERENCE_DATE"] == REFERENCE.isoformat()
     assert "SECRET_KEY" in flat and settings.SECRET_KEY not in str(settings_view)
     assert "postgres:" not in flat["DATABASE"] or "@" not in flat["DATABASE"]
+
+
+# --- Regression tests for the QA pass of 2026-11-22 (B1, B2, B3, B8) ---
+
+async def test_orders_search_by_id_and_product_name(client):
+    by_id = await client.get("/api/orders", params={"search": "O00001"})
+    assert by_id.status_code == 200, by_id.text
+    assert [o["order_id"] for o in by_id.json()["orders"]] == ["O00001"]
+    by_name = await client.get("/api/orders", params={"search": "hous", "page_size": 100})
+    assert by_name.status_code == 200, by_name.text
+    body = by_name.json()
+    assert body["total"] > 0 and {o["product_name"] for o in body["orders"]} == {"Housing"}
+    assert (await client.get("/api/orders", params={"search": "no-such-order"})).json()["total"] == 0
+
+
+async def test_rejected_upload_returns_reason_and_keeps_history_readable(client):
+    bad = await client.post(
+        "/api/data/upload", files={"file": ("bad.csv", b"Order_ID,Date,Foo\nX1,2026-01-01,3\n", "text/csv")}
+    )
+    assert bad.status_code == 422
+    assert "missing required columns" in bad.json()["detail"]
+
+    reports = await client.get("/api/data/quality")
+    assert reports.status_code == 200, reports.text
+    failed = next(r for r in reports.json() if r["filename"] == "bad.csv")
+    assert failed["status"] == "Failed" and failed["missing_by_column"] == {}
+    assert "missing required columns" in failed["error_message"]
+    detail = await client.get(f"/api/data/quality/{failed['report_id']}")
+    assert detail.status_code == 200, detail.text
+
+    # Rows written by the old code path have NULL profile columns; they must still be readable.
+    from app.models.data_quality_report import DataQualityReport, DataQualityStatus as ModelStatus
+    async with client.sessions() as session:
+        session.add(DataQualityReport(
+            report_id="legacy01", filename="legacy.csv", total_rows=0, total_columns=0,
+            quality_score=0.0, status=ModelStatus.FAILED, error_message="old failure",
+            missing_by_column=None, column_types=None, sample_data=None,
+        ))
+        await session.commit()
+    assert (await client.get("/api/data/quality")).status_code == 200
+    assert (await client.get("/api/data/quality/legacy01")).status_code == 200
+
+
+async def test_upload_rejects_non_csv_extension(client):
+    response = await client.post("/api/data/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
+    assert response.status_code == 400
+    assert ".csv" in response.json()["detail"]
+
+
+async def test_critical_priority_is_imported_and_filterable(client):
+    df = pd.read_csv(io.BytesIO(_fixture_csv()))
+    df.loc[0, "Priority"] = "Critical"
+    response = await client.post(
+        "/api/data/upload", files={"file": ("crit.csv", df.to_csv(index=False).encode(), "text/csv")}
+    )
+    assert response.status_code == 200, response.text
+    critical = (await client.get("/api/orders", params={"priority": "Critical"})).json()
+    assert critical["total"] == 1 and critical["orders"][0]["order_id"] == df.loc[0, "Order_ID"]
+    charts = await client.get("/api/analytics/charts")
+    assert charts.status_code == 200, charts.text

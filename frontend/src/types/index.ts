@@ -46,7 +46,7 @@ export interface Order {
   machine_temperature_c: number;
   machine_risk_score: number;
   next_day_demand: number;
-  priority: 'Low' | 'Medium' | 'High';
+  priority: 'Low' | 'Medium' | 'High' | 'Critical';
   due_date: string;
   status: 'Completed' | 'In Progress' | 'Pending' | 'Delayed';
   inventory_level: number;

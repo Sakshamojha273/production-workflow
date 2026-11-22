@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ortools.sat.python import cp_model
 
-DEFAULT_PRIORITY_WEIGHTS = {"High": 3.0, "Medium": 2.0, "Low": 1.0}
+DEFAULT_PRIORITY_WEIGHTS = {"Critical": 4.0, "High": 3.0, "Medium": 2.0, "Low": 1.0}
 
 # Objective weights (integer cost units).  Backlog must always cost more than
 # producing late anywhere inside the horizon; see _backlog_penalty().

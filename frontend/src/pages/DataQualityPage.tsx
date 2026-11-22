@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { format } from 'date-fns';
 import { useDataQuality } from '../hooks/useData';
-import { cn, formatNumber } from '../utils/helpers';
+import { cn, formatNumber, parseServerTimestamp } from '../utils/helpers';
 import {
   CheckCircle,
   AlertCircle,
@@ -186,7 +186,7 @@ export function DataQualityPage() {
                       {getStatusIcon(report.status)} {report.status}
                     </span>
                   </td>
-                  <td className="text-sm text-secondary-500">{format(new Date(report.created_at), 'MMM d, yyyy HH:mm')}</td>
+                  <td className="text-sm text-secondary-500">{format(parseServerTimestamp(report.created_at), 'MMM d, yyyy HH:mm')}</td>
                   <td>
                     <button onClick={() => setSelectedReport(report)} className="btn-secondary text-sm">
                       <Eye className="w-4 h-4" />

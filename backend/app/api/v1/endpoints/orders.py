@@ -45,10 +45,13 @@ async def get_orders(
     if end_date:
         stmt = stmt.where(Order.date <= end_date)
     if search:
+        # Order has no product_name column; match the product's name through Product.
+        pattern = f"%{search.strip()}%"
+        matching_products = select(Product.product_id).where(Product.name.ilike(pattern))
         stmt = stmt.where(
             or_(
-                Order.order_id.ilike(f"%{search}%"),
-                Order.product_name.ilike(f"%{search}%")
+                Order.order_id.ilike(pattern),
+                Order.product_id.in_(matching_products),
             )
         )
     
@@ -98,7 +101,7 @@ async def get_orders(
             order_id=order.order_id,
             date=order.date,
             product_id=order.product_id,
-            product_name=product.name if product else order.product_name,
+            product_name=product.name if product else order.product_id,
             category=product.category if product else order.category,
             demand=order.demand,
             production_quantity=order.production_quantity,
@@ -161,7 +164,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
         order_id=order.order_id,
         date=order.date,
         product_id=order.product_id,
-        product_name=product.name if product else order.product_name,
+        product_name=product.name if product else order.product_id,
         category=product.category if product else order.category,
         demand=order.demand,
         production_quantity=order.production_quantity,

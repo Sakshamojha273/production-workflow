@@ -19,25 +19,19 @@ async def upload_dataset(
 ):
     """Upload and process CSV dataset"""
     
-    # Validate file type - check both content type and file extension
-    allowed_content_types = settings.UPLOAD_ALLOWED_TYPES + ["text/plain", "application/vnd.ms-excel"]
-    allowed_extensions = [".csv"]
-    
+    # Validate file type by extension. Browsers send CSVs as text/csv,
+    # application/vnd.ms-excel or text/plain, so the content type alone can't tell a
+    # .csv from a .txt; the .csv extension is required.
     file_extension = ""
-    if file.filename:
-        file_extension = "." + file.filename.split(".")[-1].lower()
-    
-    is_valid_type = (
-        (file.content_type and file.content_type in allowed_content_types) or
-        file_extension in allowed_extensions
-    )
-    
-    if not is_valid_type:
+    if file.filename and "." in file.filename:
+        file_extension = "." + file.filename.rsplit(".", 1)[-1].lower()
+
+    if file_extension != ".csv":
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type. Allowed: CSV files (.csv). Received: {file.content_type or 'unknown'}"
+            detail=f"Invalid file type: {file.filename or 'unnamed file'}. Only .csv files are accepted.",
         )
-    
+
     # Read file
     content = await file.read()
     
@@ -54,6 +48,11 @@ async def upload_dataset(
         report = await processor.process_csv(content, file.filename)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # A rejected file is kept as a Failed report (visible in the history), but the
+    # upload itself must fail with the real reason instead of a 200/500.
+    if report.status == DataQualityStatus.FAILED:
+        raise HTTPException(status_code=422, detail=report.error_message or "Upload failed")
 
     return DataUploadResponse.from_orm(report)
 

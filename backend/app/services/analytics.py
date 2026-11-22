@@ -595,17 +595,17 @@ class AnalyticsService:
         result = await self.db.execute(stmt)
         data = result.all()
         
-        priority_map = {"Low": 0, "Medium": 0, "High": 0}
+        priority_map = {"Critical": 0, "Low": 0, "Medium": 0, "High": 0}
         for row in data:
             priority_map[row.priority.value] = row.count
         
         return {
             "type": "doughnut",
             "data": {
-                "labels": ["High", "Medium", "Low"],
+                "labels": ["Critical", "High", "Medium", "Low"],
                 "datasets": [{
-                    "data": [priority_map["High"], priority_map["Medium"], priority_map["Low"]],
-                    "backgroundColor": ["#ef4444", "#f59e0b", "#22c55e"]
+                    "data": [priority_map["Critical"], priority_map["High"], priority_map["Medium"], priority_map["Low"]],
+                    "backgroundColor": ["#7f1d1d", "#ef4444", "#f59e0b", "#22c55e"]
                 }]
             }
         }

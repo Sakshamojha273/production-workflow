@@ -11,6 +11,7 @@ class OrderPriority(str, enum.Enum):
     LOW = "Low"
     MEDIUM = "Medium"
     HIGH = "High"
+    CRITICAL = "Critical"
 
 
 class OrderStatus(str, enum.Enum):

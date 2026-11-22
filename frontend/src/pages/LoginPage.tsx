@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Activity, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 
+const DEMO_EMAIL = 'admin@smartplan.ai';
+const DEMO_PASSWORD = 'admin123';
+
 export function LoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@smartplan.ai');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState(DEMO_EMAIL);
+  const [password, setPassword] = useState(DEMO_PASSWORD);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +108,14 @@ export function LoginPage() {
                 <input
                   type="checkbox"
                   checked={demoLogin}
-                  onChange={(e) => setDemoLogin(e.target.checked)}
+                  onChange={(e) => {
+                    setDemoLogin(e.target.checked);
+                    // Fill the demo account so the required fields never block a demo sign-in.
+                    if (e.target.checked) {
+                      setEmail(DEMO_EMAIL);
+                      setPassword(DEMO_PASSWORD);
+                    }
+                  }}
                   className="w-4 h-4 rounded border-secondary-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-secondary-600">Use demo credentials</span>
