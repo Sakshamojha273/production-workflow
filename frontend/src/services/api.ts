@@ -318,6 +318,89 @@ class ApiService {
     };
   }
 
+  async runResearch(query: string, onEvent: (event: Record<string, unknown>) => void) {
+    const token = this.getToken();
+    const response = await fetch(`${API_BASE_URL}/research`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        this.clearToken();
+        if (window.location.pathname !== '/login') window.location.href = '/login';
+      }
+      let detail = `Research request failed (HTTP ${response.status}).`;
+      try {
+        const body = await response.json() as { detail?: unknown };
+        if (typeof body.detail === 'string') detail = body.detail;
+      } catch {
+        // Keep the HTTP status message when the server does not return JSON.
+      }
+      throw new Error(detail);
+    }
+
+    if (!response.body) {
+      throw new Error('The server did not return a research event stream.');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let receivedReport = false;
+    let finished = false;
+
+    const consumeLine = (line: string) => {
+      if (!line.startsWith('data:')) return;
+      let event: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(line.slice(5).trim());
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Invalid event shape');
+        }
+        event = parsed as Record<string, unknown>;
+      } catch {
+        throw new Error('The server returned an invalid research event.');
+      }
+
+      if (event.event === 'error') {
+        throw new Error(typeof event.message === 'string' ? event.message : 'TinyFish research failed.');
+      }
+      if (event.event === 'final_result') receivedReport = true;
+      if (event.event === 'done') finished = true;
+      onEvent(event);
+    };
+
+    try {
+      while (!finished) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        lines.forEach((line) => consumeLine(line.replace(/\r$/, '')));
+        if (done) {
+          if (buffer) consumeLine(buffer.replace(/\r$/, ''));
+          break;
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!receivedReport) {
+      throw new Error('TinyFish ended the run without a research report.');
+    }
+  }
+
+  async searchWeb(query: string) {
+    const response = await this.client.post('/search', { query });
+    return response.data;
+  }
+
   // Settings (read-only backend configuration)
   async getSettings() {
     const response = await this.client.get('/settings');

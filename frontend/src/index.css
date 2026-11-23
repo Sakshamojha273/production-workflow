@@ -19,7 +19,7 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   
   .btn-primary {
@@ -132,6 +132,208 @@
   
   .trend-neutral {
     @apply text-secondary-500;
+  }
+}
+
+/* Interactive button polish: visual feedback only; handlers and API behavior are unchanged. */
+@layer utilities {
+  button:not(:disabled) {
+    cursor: pointer;
+    transition-property: color, background-color, border-color, box-shadow, filter, opacity, scale;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  button:not(:disabled):hover {
+    filter: brightness(1.025);
+  }
+
+  button:not(:disabled):active {
+    scale: 0.96;
+    transition-duration: 70ms;
+  }
+
+  .btn {
+    isolation: isolate;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+  }
+
+  .btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(
+      105deg,
+      transparent 20%,
+      rgb(255 255 255 / 0.24) 42%,
+      transparent 64%
+    );
+    transform: translateX(-120%);
+  }
+
+  .btn:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px -8px rgb(37 99 235 / 0.48);
+  }
+
+  .btn:not(:disabled):hover::before {
+    transform: translateX(120%);
+    transition: transform 650ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .btn:not(:disabled):active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: 0 3px 8px -5px rgb(15 23 42 / 0.35);
+  }
+
+  .btn-primary:not(:disabled):hover,
+  .btn-danger:not(:disabled):hover {
+    filter: brightness(1.06) saturate(1.05);
+  }
+
+  .btn-secondary:not(:disabled):hover,
+  .btn-outline:not(:disabled):hover,
+  .btn-ghost:not(:disabled):hover {
+    box-shadow: 0 7px 14px -10px rgb(51 65 85 / 0.42);
+  }
+
+  aside button:not(:disabled),
+  aside a {
+    transition-property: color, background-color, border-color, box-shadow, transform;
+  }
+
+  aside button:not(:disabled):hover,
+  aside a:hover {
+    transform: translateX(2px);
+  }
+
+  aside button:not(:disabled):active,
+  aside a:active {
+    transform: translateX(0) scale(0.98);
+  }
+
+  .brand-logo {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+    border: 1px solid rgb(255 255 255 / 0.32);
+    background:
+      radial-gradient(circle at 30% 20%, rgb(147 197 253 / 0.95), transparent 30%),
+      linear-gradient(135deg, theme('colors.primary.500'), theme('colors.primary.800'));
+    box-shadow:
+      0 10px 24px -10px rgb(37 99 235 / 0.72),
+      inset 0 1px 0 rgb(255 255 255 / 0.28);
+    isolation: isolate;
+    transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 260ms ease;
+  }
+
+  .brand-logo::before,
+  .brand-logo::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .brand-logo::before {
+    inset: -5px;
+    z-index: -1;
+    border: 1px solid rgb(37 99 235 / 0.38);
+    border-radius: inherit;
+    animation: brand-logo-ring 2.8s ease-out infinite;
+  }
+
+  .brand-logo::after {
+    width: 38%;
+    height: 14%;
+    top: 12%;
+    left: 18%;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.38);
+    filter: blur(3px);
+    transform: rotate(-28deg);
+  }
+
+  .brand-logo-sidebar {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.75rem;
+  }
+
+  .brand-logo-login {
+    width: 5rem;
+    height: 5rem;
+    border-radius: 1.25rem;
+  }
+
+  .brand-logo-icon {
+    filter: drop-shadow(0 3px 5px rgb(30 64 175 / 0.35));
+    animation: brand-logo-pulse 2.4s ease-in-out infinite;
+  }
+
+  .brand-logo:hover {
+    transform: translateY(-2px) rotate(-2deg) scale(1.04);
+    box-shadow:
+      0 14px 30px -12px rgb(37 99 235 / 0.82),
+      inset 0 1px 0 rgb(255 255 255 / 0.38);
+  }
+
+  .brand-logo:hover .brand-logo-icon {
+    animation: brand-logo-bounce 680ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  @keyframes brand-logo-ring {
+    0%, 55% {
+      opacity: 0.65;
+      transform: scale(0.94);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.24);
+    }
+  }
+
+  @keyframes brand-logo-pulse {
+    0%, 100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.08);
+    }
+  }
+
+  @keyframes brand-logo-bounce {
+    0%, 100% {
+      transform: translateY(0) rotate(0);
+    }
+    45% {
+      transform: translateY(-3px) rotate(-8deg);
+    }
+    72% {
+      transform: translateY(1px) rotate(5deg);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled),
+  aside button:not(:disabled),
+  aside a,
+  .btn::before,
+  .brand-logo,
+  .brand-logo::before,
+  .brand-logo-icon {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  .btn:not(:disabled):hover,
+  button:not(:disabled):active,
+  aside button:not(:disabled):hover,
+  aside a:hover {
+    transform: none;
   }
 }
 

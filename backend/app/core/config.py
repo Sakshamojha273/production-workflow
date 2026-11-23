@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # a working day, so a demo session does not expire mid-presentation
+    TINYFISH_API_KEY: Optional[str] = None
     
     CORS_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000"]
     

@@ -17,6 +17,8 @@ from app.api.v1.endpoints import (
     analytics,
     maintenance,
     system_settings,
+    research,
+    search,
 )
 
 # Every router except /auth requires a valid bearer token (app/core/security.py).
@@ -37,3 +39,5 @@ api_router.include_router(reports.router, prefix="/reports", tags=["Reports"], d
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"], dependencies=[Depends(require_user)])
 api_router.include_router(maintenance.router, prefix="/maintenance", tags=["Maintenance"], dependencies=[Depends(require_user)])
 api_router.include_router(system_settings.router, prefix="/settings", tags=["Settings"], dependencies=[Depends(require_user)])
+api_router.include_router(research.router, prefix="/research", tags=["Web Research"], dependencies=[Depends(require_user)])
+api_router.include_router(search.router, prefix="/search", tags=["Web Search"], dependencies=[Depends(require_user)])

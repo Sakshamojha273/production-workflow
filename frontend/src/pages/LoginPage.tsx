@@ -39,8 +39,8 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary-600 mb-4">
-            <Activity className="w-10 h-10 text-white" />
+          <div className="brand-logo brand-logo-login mb-4" aria-label="SmartPlan AI">
+            <Activity className="brand-logo-icon w-10 h-10 text-white" aria-hidden="true" />
           </div>
           <h1 className="text-3xl font-bold text-secondary-900">SmartPlan AI</h1>
           <p className="text-secondary-500 mt-1">AI-Powered Production Planning & Workforce Optimization</p>

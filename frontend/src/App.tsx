@@ -16,6 +16,8 @@ import { DataUploadPage } from './pages/DataUploadPage';
 import { DataQualityPage } from './pages/DataQualityPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { WebResearchPage } from './pages/WebResearchPage';
+import { WebSearchPage } from './pages/WebSearchPage';
 import { api } from './services/api';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -34,6 +36,8 @@ function App() {
         <Route path="/planning/what-if" element={<WhatIfAnalysisPage />} />
         <Route path="/analytics/demand-forecast" element={<DemandForecastPage />} />
         <Route path="/analytics/machine-health" element={<MachineHealthPage />} />
+        <Route path="/analytics/research" element={<WebResearchPage />} />
+        <Route path="/analytics/search" element={<WebSearchPage />} />
         <Route path="/analytics/overview" element={<DashboardPage />} />
         <Route path="/operations/orders" element={<OrdersPage />} />
         <Route path="/operations/machines" element={<MachinesPage />} />

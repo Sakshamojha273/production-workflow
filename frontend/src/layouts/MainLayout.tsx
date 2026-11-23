@@ -42,6 +42,8 @@ const navigation: NavigationItem[] = [
     children: [
       { name: 'Demand Forecast', href: '/analytics/demand-forecast' },
       { name: 'Machine Health', href: '/analytics/machine-health' },
+      { name: 'Web Search', href: '/analytics/search' },
+      { name: 'Web Research', href: '/analytics/research' },
       { name: 'Analytics', href: '/analytics/overview' },
     ],
   },
@@ -104,8 +106,8 @@ export function MainLayout() {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className={cn('flex items-center gap-3 p-4 border-b border-secondary-200', sidebarOpen ? '' : 'justify-center')}>
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary-600">
-              <Activity className="w-6 h-6 text-white" />
+            <div className="brand-logo brand-logo-sidebar" aria-label="SmartPlan AI">
+              <Activity className="brand-logo-icon w-6 h-6 text-white" aria-hidden="true" />
             </div>
             {sidebarOpen && (
               <div>
